@@ -43,6 +43,10 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
         data = self.coordinator.data or {}
         if not data.get("enabled", False):
             return "Deaktiveret"
+        if data.get("legacy_conflicts"):
+            return "Konflikt med legacy automations"
+        if data.get("sensor_error", False):
+            return "Sensorfejl"
         if data.get("opening_active", False):
             return "Pause pga. åbning"
         if data.get("presence_eco_active", False):
@@ -63,6 +67,10 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "presence_eco_sidst_skiftet": data.get("presence_eco_last_changed"),
             "pid_aktiveret": data.get("pid_enabled"),
             "pid_sidst_skiftet": data.get("pid_last_changed"),
+            "learning_aktiveret": data.get("learning_enabled"),
+            "learning_sidst_skiftet": data.get("learning_last_changed"),
+            "sensor_error": data.get("sensor_error", False),
+            "legacy_conflicts": data.get("legacy_conflicts", []),
             "ai_factor": data.get("ai_factor"),
             "ai_reason": data.get("ai_reason"),
             "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),
@@ -170,5 +178,9 @@ class AiVarmePidStatusSensor(AiVarmeBaseEntity, SensorEntity):
         return {
             "aktiveret": data.get("pid_enabled", False),
             "sidst_skiftet": data.get("pid_last_changed"),
+            "kp": data.get("pid_kp"),
+            "ki": data.get("pid_ki"),
+            "kd": data.get("pid_kd"),
+            "deadband_c": data.get("pid_deadband_c"),
             "rum": data.get("pid_rooms", []),
         }

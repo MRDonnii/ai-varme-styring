@@ -22,6 +22,7 @@ from .const import (
     CONF_DISTRICT_HEAT_PRICE_SENSOR,
     CONF_ELECTRICITY_PRICE_SENSOR,
     CONF_ENABLE_PID_LAYER,
+    CONF_ENABLE_LEARNING,
     CONF_ENABLE_PRESENCE_ECO,
     CONF_ENABLE_PRICE_AWARENESS,
     CONF_FLOW_LIMIT_MARGIN_C,
@@ -33,6 +34,12 @@ from .const import (
     CONF_NAME,
     CONF_OLLAMA_HOST,
     CONF_OUTDOOR_TEMP_SENSOR,
+    CONF_PID_DEADBAND_C,
+    CONF_PID_INTEGRAL_LIMIT,
+    CONF_PID_KD,
+    CONF_PID_KI,
+    CONF_PID_KP,
+    CONF_PID_OFFSET_MAX_C,
     CONF_PRESENCE_AWAY_MIN,
     CONF_PRESENCE_RETURN_MIN,
     CONF_PRICE_MARGIN,
@@ -68,6 +75,7 @@ from .const import (
     DEFAULT_AI_PROVIDER,
     DEFAULT_DECIMALS,
     DEFAULT_ENABLE_PID_LAYER,
+    DEFAULT_ENABLE_LEARNING,
     DEFAULT_ENABLE_PRESENCE_ECO,
     DEFAULT_ENABLE_PRICE_AWARENESS,
     DEFAULT_FLOW_LIMIT_MARGIN_C,
@@ -75,6 +83,12 @@ from .const import (
     DEFAULT_GEMINI_MODEL_REPORT,
     DEFAULT_NAME,
     DEFAULT_OLLAMA_HOST,
+    DEFAULT_PID_DEADBAND_C,
+    DEFAULT_PID_INTEGRAL_LIMIT,
+    DEFAULT_PID_KD,
+    DEFAULT_PID_KI,
+    DEFAULT_PID_KP,
+    DEFAULT_PID_OFFSET_MAX_C,
     DEFAULT_PRESENCE_AWAY_MIN,
     DEFAULT_PRESENCE_RETURN_MIN,
     DEFAULT_PRICE_MARGIN,
@@ -189,6 +203,46 @@ def _base_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_ENABLE_PID_LAYER,
                 default=defaults.get(CONF_ENABLE_PID_LAYER, DEFAULT_ENABLE_PID_LAYER),
             ): bool,
+            vol.Required(
+                CONF_ENABLE_LEARNING,
+                default=defaults.get(CONF_ENABLE_LEARNING, DEFAULT_ENABLE_LEARNING),
+            ): bool,
+            vol.Required(
+                CONF_PID_KP,
+                default=defaults.get(CONF_PID_KP, DEFAULT_PID_KP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PID_KI,
+                default=defaults.get(CONF_PID_KI, DEFAULT_PID_KI),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=1, step=0.01, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PID_KD,
+                default=defaults.get(CONF_PID_KD, DEFAULT_PID_KD),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=2, step=0.05, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PID_DEADBAND_C,
+                default=defaults.get(CONF_PID_DEADBAND_C, DEFAULT_PID_DEADBAND_C),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=1, step=0.05, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PID_INTEGRAL_LIMIT,
+                default=defaults.get(CONF_PID_INTEGRAL_LIMIT, DEFAULT_PID_INTEGRAL_LIMIT),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PID_OFFSET_MAX_C,
+                default=defaults.get(CONF_PID_OFFSET_MAX_C, DEFAULT_PID_OFFSET_MAX_C),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Required(
                 CONF_PRICE_MARGIN,
                 default=defaults.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN),

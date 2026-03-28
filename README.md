@@ -41,3 +41,15 @@
 ## Status
 
 Første offentlige release: `v0.1.0`.
+
+## Bemærk
+
+Projektet er som udgangspunkt lavet til min egen Home Assistant-installation.
+Der er ingen garanti for løbende videreudvikling eller bred kompatibilitet.
+
+## Standalone migration
+
+Integrationen er designet til at kunne køre uden legacy varmepumpe-automations.
+Se migration-guiden:
+
+- `MIGRATION_STANDALONE.md`

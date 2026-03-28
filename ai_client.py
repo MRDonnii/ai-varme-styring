@@ -51,6 +51,36 @@ class AiProviderClient:
             LOGGER.debug("AI decision fallback: %s", err)
             return 1.0, "AI fallback regelmotor"
 
+    async def async_generate_report(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        api_key: str,
+        model: str,
+        payload: dict[str, Any],
+    ) -> str:
+        """Generate a compact Danish report in bullet format."""
+        prompt = (
+            "Skriv kun dansk tekst i punktliste med formatet:\n"
+            "Omhandler:\n"
+            "- punkt 1\n"
+            "- punkt 2\n"
+            "- punkt 3\n"
+            "Maks 8 punkter. Rund tal til 1 decimal hvor relevant.\n"
+            "Undgå markdown ud over bindestreg-punkter.\n"
+            "Data:\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+        try:
+            if provider == AI_PROVIDER_OLLAMA:
+                return await self._async_call_ollama(endpoint, model, prompt)
+            if provider == AI_PROVIDER_GEMINI:
+                return await self._async_call_gemini(api_key, model, prompt)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug("AI report fallback: %s", err)
+        return ""
+
     async def _async_call_ollama(self, endpoint: str, model: str, prompt: str) -> str:
         session = async_get_clientsession(self.hass)
         url = endpoint.rstrip("/") + "/api/generate"
@@ -89,4 +119,3 @@ class AiProviderClient:
         if start != -1 and end != -1 and end > start:
             return json.loads(text[start : end + 1])
         return {}
-

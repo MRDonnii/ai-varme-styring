@@ -11,6 +11,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .const import (
     DOMAIN,
     RUNTIME_ENABLED,
+    RUNTIME_LEARNING_ENABLED,
     RUNTIME_PID_LAYER_ENABLED,
     RUNTIME_PRESENCE_ECO_ENABLED,
 )
@@ -26,6 +27,7 @@ async def async_setup_entry(
             AiVarmeEnabledSwitch(data["coordinator"], entry),
             AiVarmePresenceEcoSwitch(data["coordinator"], entry),
             AiVarmePidLayerSwitch(data["coordinator"], entry),
+            AiVarmeLearningSwitch(data["coordinator"], entry),
         ]
     )
 
@@ -157,4 +159,48 @@ class AiVarmePidLayerSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
         return {
             "sidst_skiftet": data.get("pid_last_changed"),
             "pid_status": data.get("pid_status"),
+        }
+
+
+class AiVarmeLearningSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
+    """Runtime switch for learning mode."""
+
+    _attr_name = "Learning mode aktiv"
+    _attr_icon = "mdi:school"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_learning_enabled"
+        self._attr_is_on = False
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._attr_is_on = bool(
+            self.hass.data[DOMAIN][self.entry.entry_id].get(RUNTIME_LEARNING_ENABLED, False)
+        )
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            self._attr_is_on = last_state.state == "on"
+        self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_LEARNING_ENABLED] = self._attr_is_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._attr_is_on = True
+        await self.coordinator.async_set_learning_enabled(True)
+        self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_LEARNING_ENABLED] = True
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self._attr_is_on = False
+        await self.coordinator.async_set_learning_enabled(False)
+        self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_LEARNING_ENABLED] = False
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        data = self.coordinator.data or {}
+        return {
+            "sidst_skiftet": data.get("learning_last_changed"),
+            "learning_status": data.get("learning_status"),
         }

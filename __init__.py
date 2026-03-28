@@ -10,8 +10,10 @@ from .const import (
     DEFAULT_ECO_TARGET_C,
     DEFAULT_GLOBAL_TARGET_C,
     DEFAULT_ENABLE_PID_LAYER,
+    DEFAULT_ENABLE_LEARNING,
     DEFAULT_ENABLE_PRESENCE_ECO,
     CONF_ENABLE_PID_LAYER,
+    CONF_ENABLE_LEARNING,
     CONF_ENABLE_PRESENCE_ECO,
     DOMAIN,
     PLATFORMS,
@@ -20,6 +22,7 @@ from .const import (
     RUNTIME_GLOBAL_TARGET,
     RUNTIME_PID_LAYER_ENABLED,
     RUNTIME_PRESENCE_ECO_ENABLED,
+    RUNTIME_LEARNING_ENABLED,
 )
 from .coordinator import AiVarmeCoordinator
 
@@ -37,6 +40,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ),
         RUNTIME_PID_LAYER_ENABLED: bool(
             cfg.get(CONF_ENABLE_PID_LAYER, DEFAULT_ENABLE_PID_LAYER)
+        ),
+        RUNTIME_LEARNING_ENABLED: bool(
+            cfg.get(CONF_ENABLE_LEARNING, DEFAULT_ENABLE_LEARNING)
         ),
     }
     coordinator = AiVarmeCoordinator(hass, entry)
