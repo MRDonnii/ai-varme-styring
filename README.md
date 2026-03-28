@@ -2,6 +2,11 @@
 
 `AI Varme Styring` er en custom integration til Home Assistant, som styrer varmepumper og radiatorer rum-for-rum med prisbevidst logik, presence-eco og valgfrit PID-lag.
 
+## Note
+
+Projektet er som udgangspunkt lavet til min egen Home Assistant-installation.
+Der er ingen garanti for løbende videreudvikling eller bred kompatibilitet.
+
 ## Hvad den gør
 
 - Styrer varme pr. rum med egne sensorer, setpoints og enheder.
@@ -41,11 +46,6 @@
 ## Status
 
 Første offentlige release: `v0.1.0`.
-
-## Bemærk
-
-Projektet er som udgangspunkt lavet til min egen Home Assistant-installation.
-Der er ingen garanti for løbende videreudvikling eller bred kompatibilitet.
 
 ## Standalone migration
 
