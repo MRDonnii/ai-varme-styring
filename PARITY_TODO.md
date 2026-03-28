@@ -12,20 +12,20 @@ Mål: 100% funktionel parity med nuværende drift i `/haconfig`.
 
 ## Fase B (næste)
 
-- [ ] Setpoint snapshot + autoritativ restore (lock-flow)
-- [ ] Learning-feedback loop der tuner tærskler som i nuværende automations
-- [ ] Revert-logik med timeout og confidence-gate
-- [ ] Sensor health-check og watchdog-autorecover flow
+- [x] Setpoint snapshot + autoritativ restore (lock-flow)
+- [x] Learning-feedback loop der tuner tærskler som i nuværende automations
+- [x] Revert-logik med timeout og confidence-gate
+- [x] Sensor health-check og watchdog-autorecover flow
 
 ## Fase C (næste)
 
-- [ ] Garage presence-eco fuld 1:1 (inkl. hard-floor, min-switch, user override release)
-- [ ] Garage radiator-sync 1:1 under AI-prioritet
-- [ ] Garage heat failsafe 1:1 hvis varmepumpe er OFF under eco
-- [ ] PID garage reset-flow 1:1 ved disable/off
+- [x] Garage presence-eco fuld 1:1 (inkl. hard-floor, min-switch, user override release)
+- [x] Garage radiator-sync 1:1 under AI-prioritet
+- [x] Garage heat failsafe 1:1 hvis varmepumpe er OFF under eco
+- [x] PID garage reset-flow 1:1 ved disable/off
 
 ## Fase D (næste)
 
-- [ ] Port af alle relevante status-/analysesensorer fra templates
-- [ ] Port af AI helper-felter som entiteter i integrationen (ikke gamle helpers)
+- [x] Port af alle relevante status-/analysesensorer fra templates
+- [x] Port af AI helper-felter som entiteter i integrationen (ikke gamle helpers)
 - [ ] Endelig parity-test mod aktiv driftsscenarie (stue/køkken/garage)

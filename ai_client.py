@@ -27,11 +27,11 @@ class AiProviderClient:
         api_key: str,
         model: str,
         payload: dict[str, Any],
-    ) -> tuple[float, str]:
+    ) -> tuple[float, str, float]:
         """Return bounded decision factor and short rationale."""
         prompt = (
             "Return strict JSON only: "
-            '{"factor": <number between 0.6 and 1.4>, "reason": "<short danish text>"} '
+            '{"factor": <number between 0.6 and 1.4>, "confidence": <number 0-100>, "reason": "<short danish text>"} '
             "based on this heating context:\n"
             + json.dumps(payload, ensure_ascii=False)
         )
@@ -41,15 +41,17 @@ class AiProviderClient:
             elif provider == AI_PROVIDER_GEMINI:
                 text = await self._async_call_gemini(api_key, model, prompt)
             else:
-                return 1.0, "Ukendt AI provider"
+                return 1.0, "Ukendt AI provider", 0.0
             data = self._extract_json(text)
             factor = float(data.get("factor", 1.0))
+            confidence = float(data.get("confidence", 75.0))
             reason = str(data.get("reason", "AI standard"))
             factor = max(0.6, min(1.4, factor))
-            return factor, reason
+            confidence = max(0.0, min(100.0, confidence))
+            return factor, reason, confidence
         except Exception as err:  # noqa: BLE001
             LOGGER.debug("AI decision fallback: %s", err)
-            return 1.0, "AI fallback regelmotor"
+            return 1.0, "AI fallback regelmotor", 0.0
 
     async def async_generate_report(
         self,

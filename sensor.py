@@ -22,6 +22,10 @@ async def async_setup_entry(
             AiVarmeStatusSensor(data["coordinator"], entry),
             AiVarmeCheapestSourceSensor(data["coordinator"], entry),
             AiVarmeDeficitSensor(data["coordinator"], entry),
+            AiVarmeColdRoomsSensor(data["coordinator"], entry),
+            AiVarmeRadiatorHelpSensor(data["coordinator"], entry),
+            AiVarmeFocusRoomSensor(data["coordinator"], entry),
+            AiVarmeHouseLevelSensor(data["coordinator"], entry),
             AiVarmePidStatusSensor(data["coordinator"], entry),
             AiVarmeReportSensor(data["coordinator"], entry),
         ]
@@ -45,6 +49,8 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             return "Deaktiveret"
         if data.get("legacy_conflicts"):
             return "Konflikt med legacy automations"
+        if data.get("provider_error_state", False):
+            return "AI-provider fejl"
         if data.get("sensor_error", False):
             return "Sensorfejl"
         if data.get("opening_active", False):
@@ -70,7 +76,11 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "learning_aktiveret": data.get("learning_enabled"),
             "learning_sidst_skiftet": data.get("learning_last_changed"),
             "sensor_error": data.get("sensor_error", False),
+            "ai_confidence": data.get("ai_confidence"),
+            "confidence_threshold": data.get("confidence_threshold"),
             "legacy_conflicts": data.get("legacy_conflicts", []),
+            "provider_error_state": data.get("provider_error_state", False),
+            "sidste_styringsaktivitet": data.get("last_control_activity"),
             "ai_factor": data.get("ai_factor"),
             "ai_reason": data.get("ai_reason"),
             "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),
@@ -122,6 +132,80 @@ class AiVarmeDeficitSensor(AiVarmeBaseEntity, SensorEntity):
         return data.get("max_deficit")
 
 
+class AiVarmeColdRoomsSensor(AiVarmeBaseEntity, SensorEntity):
+    """Count of cold rooms."""
+
+    _attr_name = "Kolde rum"
+    _attr_icon = "mdi:home-thermometer-outline"
+    _attr_native_unit_of_measurement = "rum"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_cold_rooms"
+
+    @property
+    def native_value(self) -> int:
+        data = self.coordinator.data or {}
+        return int(data.get("cold_rooms_count", 0))
+
+
+class AiVarmeRadiatorHelpSensor(AiVarmeBaseEntity, SensorEntity):
+    """Count rooms where radiator is heating."""
+
+    _attr_name = "Radiatorhjælp rum"
+    _attr_icon = "mdi:radiator"
+    _attr_native_unit_of_measurement = "rum"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_radiator_help"
+
+    @property
+    def native_value(self) -> int:
+        data = self.coordinator.data or {}
+        return int(data.get("radiator_help_count", 0))
+
+
+class AiVarmeFocusRoomSensor(AiVarmeBaseEntity, SensorEntity):
+    """Current focus room for heating."""
+
+    _attr_name = "Fokusrum"
+    _attr_icon = "mdi:crosshairs-gps"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_focus_room"
+
+    @property
+    def native_value(self) -> str:
+        data = self.coordinator.data or {}
+        return str(data.get("focus_room", "Ingen"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        return {
+            "delta_c": data.get("focus_room_delta", 0.0),
+            "ekstra_rum": data.get("extra_room", "Ingen"),
+        }
+
+
+class AiVarmeHouseLevelSensor(AiVarmeBaseEntity, SensorEntity):
+    """Overall house heating level."""
+
+    _attr_name = "Husniveau"
+    _attr_icon = "mdi:home-analytics"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_house_level"
+
+    @property
+    def native_value(self) -> str:
+        data = self.coordinator.data or {}
+        return str(data.get("house_level", "Ukendt"))
+
+
 class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
     """AI report sensor."""
 
@@ -149,6 +233,7 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_model_fast": data.get("ai_model_fast"),
             "ai_model_report": data.get("ai_model_report"),
             "ai_provider_ready": data.get("ai_provider_ready"),
+            "ai_confidence": data.get("ai_confidence"),
             "gasforbrug": data.get("gas_consumption"),
             "fjernvarmeforbrug": data.get("district_heat_consumption"),
             "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),

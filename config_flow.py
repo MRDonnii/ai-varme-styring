@@ -17,6 +17,7 @@ from .const import (
     CONF_AI_MODEL_FAST,
     CONF_AI_MODEL_REPORT,
     CONF_AI_PROVIDER,
+    CONF_CONFIDENCE_THRESHOLD,
     CONF_DECIMALS,
     CONF_DISTRICT_HEAT_CONSUMPTION_SENSOR,
     CONF_DISTRICT_HEAT_PRICE_SENSOR,
@@ -45,6 +46,7 @@ from .const import (
     CONF_PRICE_MARGIN,
     CONF_RADIATOR_BOOST_C,
     CONF_RADIATOR_SETBACK_C,
+    CONF_REVERT_TIMEOUT_MIN,
     CONF_REPORT_INTERVAL_MIN,
     CONF_ROOMS,
     CONF_ROOM_AREA_ID,
@@ -73,6 +75,7 @@ from .const import (
     DEFAULT_AI_MODEL_FAST,
     DEFAULT_AI_MODEL_REPORT,
     DEFAULT_AI_PROVIDER,
+    DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_DECIMALS,
     DEFAULT_ENABLE_PID_LAYER,
     DEFAULT_ENABLE_LEARNING,
@@ -94,6 +97,7 @@ from .const import (
     DEFAULT_PRICE_MARGIN,
     DEFAULT_RADIATOR_BOOST_C,
     DEFAULT_RADIATOR_SETBACK_C,
+    DEFAULT_REVERT_TIMEOUT_MIN,
     DEFAULT_REPORT_INTERVAL_MIN,
     DEFAULT_START_DEFICIT_C,
     DEFAULT_STOP_SURPLUS_C,
@@ -242,6 +246,18 @@ def _base_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults.get(CONF_PID_OFFSET_MAX_C, DEFAULT_PID_OFFSET_MAX_C),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_CONFIDENCE_THRESHOLD,
+                default=defaults.get(CONF_CONFIDENCE_THRESHOLD, DEFAULT_CONFIDENCE_THRESHOLD),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=50, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_REVERT_TIMEOUT_MIN,
+                default=defaults.get(CONF_REVERT_TIMEOUT_MIN, DEFAULT_REVERT_TIMEOUT_MIN),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=180, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_MARGIN,
