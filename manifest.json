@@ -1,0 +1,13 @@
+{
+  "domain": "ai_varme_styring",
+  "name": "AI Varme Styring",
+  "version": "0.1.0",
+  "icon": "mdi:home-thermometer",
+  "documentation": "https://example.invalid/ai_varme_styring",
+  "requirements": [],
+  "codeowners": [
+    "@local"
+  ],
+  "config_flow": true,
+  "iot_class": "local_push"
+}

@@ -1,0 +1,50 @@
+{
+  "config": {
+    "error": {
+      "choose_one_alt_heat_source": "Vælg enten gaspris eller fjernvarmepris, ikke begge.",
+      "alt_heat_source_required": "Vælg mindst én alternativ varmekilde (gas eller fjernvarme).",
+      "ollama_host_required": "Ollama host mangler.",
+      "ollama_model_fast_required": "Hurtig Ollama-model mangler.",
+      "ollama_model_report_required": "Rapport Ollama-model mangler.",
+      "gemini_api_key_required": "Gemini API-nøgle mangler.",
+      "gemini_model_fast_required": "Hurtig Gemini-model mangler.",
+      "gemini_model_report_required": "Rapport Gemini-model mangler.",
+      "provider_invalid": "AI-provider er ugyldig.",
+      "room_name_required": "Rum-navn mangler.",
+      "no_rooms": "Der er ingen rum at redigere endnu.",
+      "at_least_one_room": "Tilføj mindst ét rum før du gemmer."
+    },
+    "step": {
+      "user": {
+        "title": "AI Varme Styring",
+        "description": "Vælg sensorer, AI-provider og logikindstillinger. Bemærk: kun rum du selv tilføjer i næste trin bliver styret."
+      },
+      "room": {
+        "title": "Tilføj rum til varmestyring",
+        "description": "Vælg kun rum hvor der faktisk er varmestyring. Integration styrer ikke automatisk alle rum."
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "choose_one_alt_heat_source": "Vælg enten gaspris eller fjernvarmepris, ikke begge.",
+      "alt_heat_source_required": "Vælg mindst én alternativ varmekilde (gas eller fjernvarme).",
+      "ollama_host_required": "Ollama host mangler.",
+      "ollama_model_fast_required": "Hurtig Ollama-model mangler.",
+      "ollama_model_report_required": "Rapport Ollama-model mangler.",
+      "gemini_api_key_required": "Gemini API-nøgle mangler.",
+      "gemini_model_fast_required": "Hurtig Gemini-model mangler.",
+      "gemini_model_report_required": "Rapport Gemini-model mangler.",
+      "provider_invalid": "AI-provider er ugyldig.",
+      "room_name_required": "Rum-navn mangler.",
+      "no_rooms": "Der er ingen rum at redigere endnu.",
+      "at_least_one_room": "Tilføj mindst ét rum før du gemmer."
+    },
+    "step": {
+      "init": {
+        "title": "AI Varme Styring indstillinger",
+        "description": "Opdater sensorer, udstyr og tærskler. Brug handlingen til at tilføje, redigere eller fjerne rum. Kun valgte rum bliver styret."
+      }
+    }
+  }
+}
