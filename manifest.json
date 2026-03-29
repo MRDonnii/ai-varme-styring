@@ -1,8 +1,8 @@
 {
   "domain": "ai_varme_styring",
   "name": "AI Varme Styring",
-  "version": "0.1.9",
-  "icon": "mdi:home-thermometer",
+  "version": "0.1.11",
+  "icon": "mdi:thermostat",
   "documentation": "https://github.com/MRDonnii/ai-varme-styring",
   "requirements": [],
   "codeowners": [

@@ -2,6 +2,19 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.11
+
+Date: 2026-03-29
+
+### Fixed
+- Fixed integration version metadata mismatch:
+  - `manifest.json` now correctly reports `0.1.11`.
+- Fixed HA icon compatibility in integration metadata:
+  - Updated manifest icon to `mdi:thermostat` to avoid "Icon not available" in clients that reject unsupported icon identifiers.
+
+### Compatibility
+- Keeps `icon.png` and `logo.png` branding assets for HA/HACS clients requiring PNG assets.
+
 ## v0.1.9
 
 Date: 2026-03-29

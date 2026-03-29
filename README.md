@@ -116,7 +116,7 @@ For migration steps, see MIGRATION_STANDALONE.md.
 
 ## Current status
 
-Current documented release: v0.1.9.
+Current documented release: v0.1.11.
 See CHANGELOG.md for full release details.
 
 ## Brand assets
