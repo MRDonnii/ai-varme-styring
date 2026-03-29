@@ -1,78 +1,78 @@
 # Changelog
 
-Alle væsentlige ændringer i integrationen bliver samlet her.
+All significant changes to the integration are documented here.
 
 ## v0.1.3
 
-Dato: 2026-03-29
+Date: 2026-03-29
 
-### Tilføjet
-- Ny `button` platform med manuelle triggere:
-  - Kør AI-gennemgang nu
-  - Kør AI-rapport nu
-  - Rum-boost nu
-- Per-rum runtime mål-overstyring i motoren, så AI-mål kan styres stabilt selv hvis gammel helper er utilgængelig.
-- Per-rum justering af åbningstider i runtime:
-  - Pause efter åbning (minutter før AC pause)
-  - Genstart efter lukning (minutter før AC genoptag)
+### Added
+- New `button` platform with manual actions:
+  - Run AI review now
+  - Run AI report now
+  - Apply room boost now
+- Per-room runtime target override in the engine, keeping AI targets stable even when legacy helpers are unavailable.
+- Per-room runtime opening timing controls:
+  - Pause after opening (minutes before AC pause)
+  - Resume after closing (minutes before AC restart)
 
-### Forbedret
-- Prislogik for varmekildevalg:
-  - Prioriterer nu eksisterende varmeprissensorer (`sensor.varmepris_varmepumpe`, `sensor.varmepris_gasfyr`) når de findes.
-  - Fallback til intern beregning ved manglende sensorer.
-- Varmepumpe-start ved underskud er gjort mere robust:
-  - Lav AI-konfidens blokerer ikke længere basal varmelevering.
-  - AI dæmper aggressivitet i stedet for at stoppe nødvendig opvarmning.
-- Eco-flow i rum:
-  - Eco overskriver ikke længere brugerens AI-mål-helper.
-  - Bedre og mere forudsigelig tilbagevenden fra eco-tilstand.
-- Rapportflow:
-  - Stabiliseret tekstnormalisering for mere læsbare danske rapporter.
-  - Forbedret kompatibilitet mellem nye/legacy rapport-attributter.
-- Bedre robusthed ved helper/navne-mismatch:
-  - Motoren forsøger at resolve gyldig target-helper ud fra rum-navn og kendte mønstre.
+### Improved
+- Heat source price selection logic:
+  - Now prioritizes existing heat-price sensors (`sensor.varmepris_varmepumpe`, `sensor.varmepris_gasfyr`) when available.
+  - Falls back to internal price calculation if sensors are missing.
+- More robust heat pump start behavior during deficit:
+  - Low AI confidence no longer blocks baseline heating.
+  - AI now dampens aggressiveness instead of preventing required heating.
+- Room eco flow behavior:
+  - Eco no longer overwrites user-controlled AI target helpers.
+  - More predictable return from eco mode.
+- Reporting flow:
+  - Improved text normalization for clearer reports.
+  - Better compatibility between new and legacy report attributes.
+- Better helper/name mismatch resilience:
+  - The engine now resolves a valid target helper using room name patterns and known helper naming conventions.
 
-### Stabilitet og migration
-- Flere gamle legacy-konflikter håndteres bedre ved migration til standalone integration.
-- Forbedret kompatibilitet med eksisterende dashboards og rumkort.
+### Stability and migration
+- Better handling of legacy conflicts during migration to standalone integration mode.
+- Improved compatibility with existing dashboards and room cards.
 
 ## v0.1.2
 
-Dato: 2026-03-28
+Date: 2026-03-28
 
-### Tilføjet
-- Runtime-toggle entiteter med persistens:
-  - Aktiv styring
-  - Presence-Eco aktiv
-  - PID-lag aktiv
-  - Learning mode aktiv
-- Nye runtime-justerbare `number`-entiteter:
-  - Presence away/return minutter
-  - PID Kp/Ki/Kd, deadband, integral-grænse, max offset
+### Added
+- Persistent runtime toggle entities:
+  - Active control
+  - Presence eco active
+  - PID layer active
+  - Learning mode active
+- New runtime-adjustable `number` entities:
+  - Presence away/return minutes
+  - PID Kp/Ki/Kd, deadband, integral limit, max offset
   - AI confidence threshold
   - AI revert timeout
-- Nye analysesensorer:
-  - PID-lag status
-  - Kolde rum
-  - Radiatorhjælp rum
-  - Fokusrum
-  - Husniveau
+- New analysis sensors:
+  - PID layer status
+  - Cold rooms
+  - Radiator assist rooms
+  - Focus room
+  - House level
 
-### Forbedret
-- Setup-stabilitet i `__init__.py` (runtime store initialiseres før første refresh).
-- Setpoint lock/snapshot + autoritativ restore-flow.
-- Confidence-gate og revert-timeout i AI beslutningsflow.
-- Watchdog/sensor health-check flow.
-- Learning-loop for adaptive rum-offsets.
-- AI rapportflow bruger nu model + rapportinterval aktivt.
-- Legacy-konfliktdetektion mod kendte gamle automation-ID'er.
+### Improved
+- Setup stability in `__init__.py` (runtime store initializes before first refresh).
+- Setpoint lock/snapshot and authoritative restore flow.
+- Confidence gate and revert timeout in AI decision flow.
+- Watchdog/sensor health checks.
+- Learning loop for adaptive room offsets.
+- AI reporting now actively uses model and report interval settings.
+- Legacy conflict detection for known old automation IDs.
 
-### Garage-specifik parity
+### Garage-specific parity
 - Presence-eco enter/exit restore-flow.
 - Hard-floor radiator guard.
-- Heat failsafe når eco er aktiv og varmepumpe ikke leverer varme.
-- PID reset-flow ved disable/off.
+- Heat failsafe when eco is active and the heat pump is not delivering heat.
+- PID reset flow on disable/off.
 
-### Dokumentation
-- `PARITY_TODO.md` opdateret med gennemførte faser.
-- `MIGRATION_STANDALONE.md` udbygget til standalone-migrering.
+### Documentation
+- `PARITY_TODO.md` updated with completed phases.
+- `MIGRATION_STANDALONE.md` expanded for standalone migration.
