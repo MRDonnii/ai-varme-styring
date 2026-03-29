@@ -599,6 +599,21 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return AiVarmeStyringOptionsFlow(config_entry)
 
 
+def _room_label(idx: int, room: dict[str, Any]) -> str:
+    """Build a descriptive label for a room showing name, sensor and heat pump."""
+    name = room.get(CONF_ROOM_NAME) or f"Rum {idx + 1}"
+    sensor = room.get(CONF_ROOM_TEMP_SENSOR, "")
+    heat_pump = room.get(CONF_ROOM_HEAT_PUMP, "")
+    extras = []
+    if sensor:
+        extras.append(sensor.split(".")[-1])
+    if heat_pump:
+        extras.append(heat_pump.split(".")[-1])
+    if extras:
+        return f"{name} ({', '.join(extras)})"
+    return name
+
+
 class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow."""
 
@@ -687,7 +702,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
     async def async_step_room_edit_select(
         self, user_input: dict[str, Any] | None = None
     ):
-        room_options = [f"{idx}: {room.get(CONF_ROOM_NAME, f'Rum {idx+1}')}" for idx, room in enumerate(self._rooms)]
+        room_options = [_room_label(idx, room) for idx, room in enumerate(self._rooms)]
         if user_input is not None:
             self._selected_room_index = int(user_input["room_index"])
             return await self.async_step_room_edit()
@@ -706,6 +721,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
                     )
                 }
             ),
+            description_placeholders={"room_count": str(len(self._rooms))},
         )
 
     async def async_step_room_edit(self, user_input: dict[str, Any] | None = None):
@@ -713,6 +729,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
         idx = self._selected_room_index
         if idx is None or idx < 0 or idx >= len(self._rooms):
             return await self.async_step_init()
+        current_room = self._rooms[idx]
         if user_input is not None:
             user_input = await self._auto_fill_room_from_area(user_input)
             room_name = str(user_input.get(CONF_ROOM_NAME, "")).strip()
@@ -726,14 +743,17 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
                 return await self.async_step_init()
         return self.async_show_form(
             step_id="room_edit",
-            data_schema=_room_schema(self._rooms[idx], include_add_another=False),
+            data_schema=_room_schema(current_room, include_add_another=False),
             errors=errors,
+            description_placeholders={
+                "room_name": current_room.get(CONF_ROOM_NAME, f"Rum {idx + 1}")
+            },
         )
 
     async def async_step_room_remove_select(
         self, user_input: dict[str, Any] | None = None
     ):
-        room_options = [f"{idx}: {room.get(CONF_ROOM_NAME, f'Rum {idx+1}')}" for idx, room in enumerate(self._rooms)]
+        room_options = [_room_label(idx, room) for idx, room in enumerate(self._rooms)]
         if user_input is not None:
             idx = int(user_input["room_index"])
             if 0 <= idx < len(self._rooms):

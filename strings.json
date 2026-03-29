@@ -43,7 +43,23 @@
     "step": {
       "init": {
         "title": "AI Varme Styring indstillinger",
-        "description": "Opdater sensorer, udstyr og tærskler. Brug handlingen til at tilføje, redigere eller fjerne rum. Kun valgte rum bliver styret."
+        "description": "Opdater sensorer, udstyr og tærskler. {room_count} rum er konfigureret. Brug handlingen herunder til at tilføje, redigere eller fjerne rum."
+      },
+      "room_add": {
+        "title": "Tilføj rum",
+        "description": "Angiv navn, sensor og udstyr for det nye rum. Valgfrie felter (varmepumpe, radiatorer, sensorer) kan tilføjes eller springes over."
+      },
+      "room_edit_select": {
+        "title": "Vælg rum der skal redigeres",
+        "description": "Vælg det rum du vil redigere. Hvert rum vises med navn og tilknyttet temperatursensor. {room_count} rum er konfigureret."
+      },
+      "room_edit": {
+        "title": "Rediger rum: {room_name}",
+        "description": "Opdater navn, sensor eller udstyr for rummet. Slet indholdet i et felt for at fjerne en enhed. Ændringer gemmes når du trykker Send."
+      },
+      "room_remove_select": {
+        "title": "Fjern rum",
+        "description": "Vælg det rum du vil fjerne permanent. Denne handling kan ikke fortrydes."
       }
     }
   }
