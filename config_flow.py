@@ -53,6 +53,9 @@ from .const import (
     CONF_ROOM_HEAT_PUMP,
     CONF_ROOM_NAME,
     CONF_ROOM_OCCUPANCY_SENSORS,
+    CONF_ROOM_ENABLE_PRESENCE_ECO,
+    CONF_ROOM_ENABLE_LEARNING,
+    CONF_ROOM_ENABLE_OPENING_PAUSE,
     CONF_ROOM_OPENING_SENSORS,
     CONF_ROOM_RADIATORS,
     CONF_ROOM_ANTI_SHORT_CYCLE_MIN,
@@ -112,6 +115,9 @@ from .const import (
     DEFAULT_ROOM_STOP_SURPLUS_C,
     DEFAULT_ROOM_RESUME_AFTER_CLOSED_MIN,
     DEFAULT_ROOM_SENSOR_BIAS_C,
+    DEFAULT_ROOM_ENABLE_PRESENCE_ECO,
+    DEFAULT_ROOM_ENABLE_LEARNING,
+    DEFAULT_ROOM_ENABLE_OPENING_PAUSE,
     DOMAIN,
 )
 
@@ -332,6 +338,18 @@ def _room_schema(
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=-3, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Required(
+                CONF_ROOM_ENABLE_PRESENCE_ECO,
+                default=defaults.get(CONF_ROOM_ENABLE_PRESENCE_ECO, DEFAULT_ROOM_ENABLE_PRESENCE_ECO),
+            ): bool,
+            vol.Required(
+                CONF_ROOM_ENABLE_LEARNING,
+                default=defaults.get(CONF_ROOM_ENABLE_LEARNING, DEFAULT_ROOM_ENABLE_LEARNING),
+            ): bool,
+            vol.Required(
+                CONF_ROOM_ENABLE_OPENING_PAUSE,
+                default=defaults.get(CONF_ROOM_ENABLE_OPENING_PAUSE, DEFAULT_ROOM_ENABLE_OPENING_PAUSE),
+            ): bool,
             vol.Optional(
                 CONF_ROOM_LINK_GROUP,
                 default=defaults.get(CONF_ROOM_LINK_GROUP, DEFAULT_ROOM_LINK_GROUP),

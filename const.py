@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "ai_varme_styring"
 
-PLATFORMS: Final[list[str]] = ["sensor", "switch", "number"]
+PLATFORMS: Final[list[str]] = ["sensor", "switch", "number", "button"]
 
 CONF_NAME: Final = "name"
 CONF_ROOMS: Final = "rooms"
@@ -18,6 +18,9 @@ CONF_ROOM_HEAT_PUMP: Final = "room_heat_pump"
 CONF_ROOM_RADIATORS: Final = "room_radiators"
 CONF_ROOM_OPENING_SENSORS: Final = "room_opening_sensors"
 CONF_ROOM_OCCUPANCY_SENSORS: Final = "room_occupancy_sensors"
+CONF_ROOM_ENABLE_PRESENCE_ECO: Final = "room_enable_presence_eco"
+CONF_ROOM_ENABLE_LEARNING: Final = "room_enable_learning"
+CONF_ROOM_ENABLE_OPENING_PAUSE: Final = "room_enable_opening_pause"
 CONF_ROOM_SENSOR_BIAS_C: Final = "room_sensor_bias_c"
 CONF_ROOM_LINK_GROUP: Final = "room_link_group"
 CONF_ROOM_ANTI_SHORT_CYCLE_MIN: Final = "room_anti_short_cycle_min"
@@ -108,6 +111,9 @@ DEFAULT_GEMINI_MODEL_FAST: Final = "gemini-2.5-flash"
 DEFAULT_GEMINI_MODEL_REPORT: Final = "gemini-2.5-pro"
 DEFAULT_REPORT_INTERVAL_MIN: Final = 2
 DEFAULT_ROOM_SENSOR_BIAS_C: Final = 0.0
+DEFAULT_ROOM_ENABLE_PRESENCE_ECO: Final = False
+DEFAULT_ROOM_ENABLE_LEARNING: Final = True
+DEFAULT_ROOM_ENABLE_OPENING_PAUSE: Final = True
 DEFAULT_ROOM_LINK_GROUP: Final = ""
 DEFAULT_ROOM_ANTI_SHORT_CYCLE_MIN: Final = 3
 DEFAULT_ROOM_QUICK_START_DEFICIT_C: Final = 0.4

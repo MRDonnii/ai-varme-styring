@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+import json
 import logging
+import re
 from typing import Any
 
 from homeassistant.components.climate.const import HVACMode
@@ -26,6 +28,7 @@ from .const import (
     CONF_DISTRICT_HEAT_CONSUMPTION_SENSOR,
     CONF_DISTRICT_HEAT_PRICE_SENSOR,
     CONF_ELECTRICITY_PRICE_SENSOR,
+    CONF_ENABLE_PID_LAYER,
     CONF_ENABLE_LEARNING,
     CONF_ENABLE_PRESENCE_ECO,
     CONF_ENABLE_PRICE_AWARENESS,
@@ -58,6 +61,9 @@ from .const import (
     CONF_ROOM_MASSIVE_OVERHEAT_MIN,
     CONF_ROOM_NAME,
     CONF_ROOM_OCCUPANCY_SENSORS,
+    CONF_ROOM_ENABLE_PRESENCE_ECO,
+    CONF_ROOM_ENABLE_LEARNING,
+    CONF_ROOM_ENABLE_OPENING_PAUSE,
     CONF_ROOM_OPENING_SENSORS,
     CONF_ROOM_PAUSE_AFTER_OPEN_MIN,
     CONF_ROOM_QUICK_START_DEFICIT_C,
@@ -93,6 +99,9 @@ from .const import (
     DEFAULT_RADIATOR_SETBACK_C,
     DEFAULT_REVERT_TIMEOUT_MIN,
     DEFAULT_ROOM_ANTI_SHORT_CYCLE_MIN,
+    DEFAULT_ROOM_ENABLE_PRESENCE_ECO,
+    DEFAULT_ROOM_ENABLE_LEARNING,
+    DEFAULT_ROOM_ENABLE_OPENING_PAUSE,
     DEFAULT_ROOM_LINK_GROUP,
     DEFAULT_ROOM_MASSIVE_OVERHEAT_C,
     DEFAULT_ROOM_MASSIVE_OVERHEAT_MIN,
@@ -188,6 +197,18 @@ def _fmt_ts(ts: float | int | None) -> str | None:
     return dt_util.as_local(dt_util.utc_from_timestamp(float(ts))).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _slug_text(value: str) -> str:
+    normalized = value.lower()
+    normalized = normalized.replace("æ", "ae").replace("ø", "oe").replace("å", "aa")
+    out = []
+    for ch in normalized:
+        if ("a" <= ch <= "z") or ("0" <= ch <= "9"):
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out).strip("_")
+
+
 def _legacy_automation_conflicts(hass: HomeAssistant) -> list[str]:
     conflicts: list[str] = []
     for st in hass.states.async_all("automation"):
@@ -198,6 +219,63 @@ def _legacy_automation_conflicts(hass: HomeAssistant) -> list[str]:
             conflicts.append(aid)
     conflicts.sort()
     return conflicts
+
+
+def _resolve_room_target_number_entity(
+    hass: HomeAssistant, room_name: str, configured_entity: str | None
+) -> str | None:
+    """Resolve a usable input_number target helper for a room.
+
+    Prefers configured entity when available; otherwise tries common naming patterns
+    and finally scans input_number entities for a room/target match.
+    """
+
+    def _state_ok(entity_id: str | None) -> bool:
+        if not entity_id:
+            return False
+        st = hass.states.get(entity_id)
+        if st is None:
+            return False
+        return str(st.state).lower() not in {"unknown", "unavailable", "none", ""}
+
+    base_slug = _slug_text(room_name)
+    slug_variants: set[str] = {base_slug}
+    slug_variants.add(base_slug.replace("oe", "o").replace("ae", "a").replace("aa", "a"))
+    if not base_slug.endswith("n"):
+        slug_variants.add(f"{base_slug}n")
+
+    candidates: list[str] = []
+    if configured_entity:
+        candidates.append(str(configured_entity))
+    for slug in sorted(slug_variants):
+        candidates.extend(
+            [
+                f"input_number.thermostat_{slug}_target",
+                f"input_number.{slug}_temperature_target",
+                f"input_number.ai_varme_target_{slug}",
+            ]
+        )
+
+    for st in hass.states.async_all("input_number"):
+        eid = st.entity_id
+        eid_l = eid.lower()
+        if ("target" not in eid_l) and ("temperature_target" not in eid_l):
+            continue
+        if any(slug in eid_l for slug in slug_variants):
+            candidates.append(eid)
+
+    seen: set[str] = set()
+    dedup: list[str] = []
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        dedup.append(c)
+
+    for c in dedup:
+        if _state_ok(c):
+            return c
+    return dedup[0] if dedup else None
 
 
 @dataclass
@@ -213,6 +291,17 @@ class RoomSnapshot:
     surplus: float
     opening_active: bool
     occupancy_active: bool
+    presence_eco_enabled: bool
+    learning_enabled: bool
+    opening_pause_enabled: bool
+    room_enabled: bool
+    eco_target: float
+    presence_away_min: float
+    presence_return_min: float
+    boost_active: bool
+    boost_delta_c: float
+    boost_until_ts: float | None
+    boost_duration_min: float
     target_number_entity: str | None
     heat_pump: str | None
     radiators: list[str]
@@ -247,6 +336,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "presence_eco_last_changed": None,
             "pid_last_changed": None,
             "learning_last_changed": None,
+            "manual_ai_last_trigger": None,
+            "manual_report_last_trigger": None,
             "last_control_activity": None,
         }
         self._store = Store(hass, _STORE_VERSION, f"{DOMAIN}_{entry.entry_id}_runtime")
@@ -339,6 +430,108 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         runtime[RUNTIME_LEARNING_ENABLED] = bool(enabled)
         self._runtime_events["learning_last_changed"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
+
+    async def async_set_room_presence_eco_enabled(self, room_name: str, enabled: bool) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["presence_eco_enabled_override"] = bool(enabled)
+        rt["room_presence_eco_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_opening_pause_enabled(self, room_name: str, enabled: bool) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["opening_pause_enabled_override"] = bool(enabled)
+        rt["room_opening_pause_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_pause_after_open_min(self, room_name: str, minutes: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["pause_after_open_min_override"] = float(minutes)
+        rt["room_pause_after_open_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_resume_after_closed_min(self, room_name: str, minutes: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["resume_after_closed_min_override"] = float(minutes)
+        rt["room_resume_after_closed_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_target_lock(self, room_name: str, target: float) -> None:
+        lock_rt = self._room_runtime.setdefault(
+            f"__target_lock__{room_name}",
+            {"locked_target": float(target), "last_seen_target": float(target)},
+        )
+        lock_rt["locked_target"] = float(target)
+        lock_rt["last_seen_target"] = float(target)
+        await self._async_save_runtime()
+
+    async def async_set_room_target_override(self, room_name: str, target: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["target_override"] = float(target)
+        rt["room_target_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+        await self.async_request_refresh()
+
+    async def async_set_room_eco_target(self, room_name: str, target: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["eco_target_override"] = float(target)
+        rt["room_eco_target_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_presence_away_min(self, room_name: str, minutes: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["presence_away_min_override"] = float(minutes)
+        rt["room_presence_away_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_presence_return_min(self, room_name: str, minutes: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["presence_return_min_override"] = float(minutes)
+        rt["room_presence_return_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_enabled(self, room_name: str, enabled: bool) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["room_enabled_override"] = bool(enabled)
+        rt["room_enabled_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_trigger_room_boost(
+        self,
+        room_name: str,
+        *,
+        delta_c: float = 1.0,
+        duration_min: float = 60.0,
+    ) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["boost_delta_c"] = float(delta_c)
+        rt["boost_until_ts"] = dt_util.utcnow().timestamp() + (float(duration_min) * 60.0)
+        rt["room_boost_last_trigger"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+        await self.async_request_refresh()
+
+    async def async_set_room_boost_delta(self, room_name: str, delta_c: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["boost_delta_c"] = float(delta_c)
+        rt["room_boost_delta_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_boost_duration(self, room_name: str, duration_min: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["boost_duration_min"] = float(duration_min)
+        rt["room_boost_duration_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_trigger_ai_decision(self) -> None:
+        self._last_ai_update = None
+        self._runtime_events["manual_ai_last_trigger"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+        await self.async_request_refresh()
+
+    async def async_trigger_ai_report(self) -> None:
+        self._last_report_update = None
+        self._runtime_events["manual_report_last_trigger"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+        await self.async_request_refresh()
 
     def _remember_manual_baseline(self, climate_entity: str) -> None:
         if climate_entity in self._manual_baseline:
@@ -506,6 +699,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         unavailable = 0
         for idx, room_cfg in enumerate(rooms_cfg):
             name = str(room_cfg.get(CONF_ROOM_NAME) or f"Rum {idx + 1}")
+            room_rt = self._room_runtime.setdefault(name, {})
             temp_entity = room_cfg.get(CONF_ROOM_TEMP_SENSOR)
             if not temp_entity:
                 unavailable += 1
@@ -520,7 +714,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             adj_temp = raw_temp - bias
 
             target = target_base
-            tgt_number = room_cfg.get(CONF_ROOM_TARGET_NUMBER)
+            tgt_number = _resolve_room_target_number_entity(
+                self.hass, name, room_cfg.get(CONF_ROOM_TARGET_NUMBER)
+            )
             if tgt_number:
                 tgt_state = self.hass.states.get(tgt_number)
                 tgt = _safe_float(tgt_state.state if tgt_state else None)
@@ -539,10 +735,15 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         user_change = bool(tgt_state and tgt_state.context and tgt_state.context.user_id)
                         if user_change:
                             lock_rt["locked_target"] = tgt
+                            room_rt["target_override"] = tgt
+                            room_rt["room_target_last_changed"] = now_ts
                         elif abs(tgt - float(locked_target)) > 0.01:
                             target_restore_actions.append((tgt_number, float(locked_target), name))
                         lock_rt["last_seen_target"] = tgt
                     target = tgt
+            target_override = _safe_float(room_rt.get("target_override"))
+            if target_override is not None:
+                target = target_override
 
             opening_active = any(
                 _is_on(self.hass.states.get(s).state if self.hass.states.get(s) else None)
@@ -551,6 +752,45 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             occupancy_active = any(
                 _is_on(self.hass.states.get(s).state if self.hass.states.get(s) else None)
                 for s in room_cfg.get(CONF_ROOM_OCCUPANCY_SENSORS, [])
+            )
+            room_enabled = bool(room_rt.get("room_enabled_override", True))
+            presence_eco_enabled_room = bool(
+                room_rt.get(
+                    "presence_eco_enabled_override",
+                    room_cfg.get(CONF_ROOM_ENABLE_PRESENCE_ECO, DEFAULT_ROOM_ENABLE_PRESENCE_ECO),
+                )
+            )
+            eco_target_room = float(room_rt.get("eco_target_override", eco_target))
+            away_min_room = float(room_rt.get("presence_away_min_override", presence_away_min))
+            return_min_room = float(room_rt.get("presence_return_min_override", presence_return_min))
+            boost_until_ts = room_rt.get("boost_until_ts")
+            boost_active = isinstance(boost_until_ts, (int, float)) and float(boost_until_ts) > now_ts
+            if not boost_active and "boost_until_ts" in room_rt:
+                room_rt.pop("boost_until_ts", None)
+            boost_delta_c = float(room_rt.get("boost_delta_c", 1.0))
+            boost_duration_min = float(room_rt.get("boost_duration_min", 60.0))
+            if boost_active:
+                target = target + boost_delta_c
+            learning_enabled_room = bool(
+                room_cfg.get(CONF_ROOM_ENABLE_LEARNING, DEFAULT_ROOM_ENABLE_LEARNING)
+            )
+            opening_pause_enabled_room = bool(
+                room_rt.get(
+                    "opening_pause_enabled_override",
+                    room_cfg.get(CONF_ROOM_ENABLE_OPENING_PAUSE, DEFAULT_ROOM_ENABLE_OPENING_PAUSE),
+                )
+            )
+            pause_after_open_min_room = float(
+                room_rt.get(
+                    "pause_after_open_min_override",
+                    room_cfg.get(CONF_ROOM_PAUSE_AFTER_OPEN_MIN, DEFAULT_ROOM_PAUSE_AFTER_OPEN_MIN),
+                )
+            )
+            resume_after_closed_min_room = float(
+                room_rt.get(
+                    "resume_after_closed_min_override",
+                    room_cfg.get(CONF_ROOM_RESUME_AFTER_CLOSED_MIN, DEFAULT_ROOM_RESUME_AFTER_CLOSED_MIN),
+                )
             )
 
             rooms.append(
@@ -564,6 +804,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     surplus=max(adj_temp - target, 0.0),
                     opening_active=opening_active,
                     occupancy_active=occupancy_active,
+                    presence_eco_enabled=presence_eco_enabled_room,
+                    learning_enabled=learning_enabled_room,
+                    opening_pause_enabled=opening_pause_enabled_room,
+                    room_enabled=room_enabled,
+                    eco_target=eco_target_room,
+                    presence_away_min=away_min_room,
+                    presence_return_min=return_min_room,
+                    boost_active=bool(boost_active),
+                    boost_delta_c=boost_delta_c,
+                    boost_until_ts=float(boost_until_ts) if isinstance(boost_until_ts, (int, float)) else None,
+                    boost_duration_min=boost_duration_min,
                     target_number_entity=tgt_number,
                     heat_pump=room_cfg.get(CONF_ROOM_HEAT_PUMP),
                     radiators=list(room_cfg.get(CONF_ROOM_RADIATORS, [])),
@@ -587,10 +838,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                     ),
                     pause_after_open_min=float(
-                        room_cfg.get(CONF_ROOM_PAUSE_AFTER_OPEN_MIN, DEFAULT_ROOM_PAUSE_AFTER_OPEN_MIN)
+                        pause_after_open_min_room
                     ),
                     resume_after_closed_min=float(
-                        room_cfg.get(CONF_ROOM_RESUME_AFTER_CLOSED_MIN, DEFAULT_ROOM_RESUME_AFTER_CLOSED_MIN)
+                        resume_after_closed_min_room
                     ),
                     massive_overheat_c=float(
                         room_cfg.get(CONF_ROOM_MASSIVE_OVERHEAT_C, DEFAULT_ROOM_MASSIVE_OVERHEAT_C)
@@ -600,6 +851,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ),
                 )
             )
+
+        room_slug_map: dict[str, RoomSnapshot] = {}
+        for r in rooms:
+            room_slug_map[_slug_text(r.name)] = r
 
         max_deficit = max((r.deficit for r in rooms), default=0.0)
         max_surplus = max((r.surplus for r in rooms), default=0.0)
@@ -675,23 +930,49 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         legacy_conflicts = _legacy_automation_conflicts(self.hass)
         price_margin = float(cfg.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN))
         price_awareness = bool(cfg.get(CONF_ENABLE_PRICE_AWARENESS, True))
-        heat_pump_cheaper = (
-            el_price is not None and gas_price is not None and (gas_price - el_price) >= price_margin
+        # Prefer legacy heat-price sensors when present (COP + boiler-efficiency aware):
+        # - sensor.varmepris_varmepumpe
+        # - sensor.varmepris_gasfyr
+        # Fall back to integration-native inputs when those are not available.
+        legacy_hp_price = _safe_float(
+            self.hass.states.get("sensor.varmepris_varmepumpe").state
+            if self.hass.states.get("sensor.varmepris_varmepumpe")
+            else None
         )
+        legacy_gas_heat_price = _safe_float(
+            self.hass.states.get("sensor.varmepris_gasfyr").state
+            if self.hass.states.get("sensor.varmepris_gasfyr")
+            else None
+        )
+        # Fallback for setups without legacy templates.
+        assumed_hp_cop = 3.0
+        fallback_hp_price = None
+        if el_price is not None:
+            fallback_hp_price = el_price / max(1.0, assumed_hp_cop)
+        effective_hp_price = legacy_hp_price if legacy_hp_price is not None else fallback_hp_price
         cheapest_alt_price = None
         cheapest_alt_name = None
-        for name, price in (("Gas", gas_price), ("Fjernvarme", district_heat_price)):
+        gas_compare_price = legacy_gas_heat_price if legacy_gas_heat_price is not None else gas_price
+        for name, price in (("Gas", gas_compare_price), ("Fjernvarme", district_heat_price)):
             if price is None:
                 continue
             if cheapest_alt_price is None or price < cheapest_alt_price:
                 cheapest_alt_price = price
                 cheapest_alt_name = name
+        heat_pump_cheaper = (
+            effective_hp_price is not None
+            and cheapest_alt_price is not None
+            and (cheapest_alt_price - effective_hp_price) >= price_margin
+        )
         estimated_savings_per_kwh = None
-        if el_price is not None and cheapest_alt_price is not None:
-            estimated_savings_per_kwh = round(max(cheapest_alt_price - el_price, 0.0), decimals)
+        if effective_hp_price is not None and cheapest_alt_price is not None:
+            estimated_savings_per_kwh = round(max(cheapest_alt_price - effective_hp_price, 0.0), decimals)
         estimated_daily_savings = None
         if estimated_savings_per_kwh is not None and district_heat_consumption is not None:
             estimated_daily_savings = round(estimated_savings_per_kwh * district_heat_consumption, decimals)
+        estimated_monthly_savings = None
+        if estimated_daily_savings is not None:
+            estimated_monthly_savings = round(estimated_daily_savings * 30.0, decimals)
 
         flow_limit_margin = float(cfg.get(CONF_FLOW_LIMIT_MARGIN_C, DEFAULT_FLOW_LIMIT_MARGIN_C))
         radiator_boost = float(cfg.get(CONF_RADIATOR_BOOST_C, DEFAULT_RADIATOR_BOOST_C))
@@ -758,21 +1039,29 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         actions: list[str] = []
         opening_active_any = any(r.opening_active for r in rooms)
         flow_limited = any(r.temperature >= (r.target + flow_limit_margin) for r in rooms)
+        thermostat_handover = False
         pid_rows: list[dict[str, Any]] = []
         provider_error_state = bool(provider_ready and self._ai_confidence <= 0.1)
+        room_enabled_map = {r.name: bool(r.room_enabled) for r in rooms}
         for target_entity, locked_target, room_name in target_restore_actions:
+            if not room_enabled_map.get(room_name, True):
+                continue
             await self._async_set_input_number_if_needed(target_entity, locked_target, actions)
             actions.append(f"{room_name}: autoritativ target restore -> {round(locked_target, decimals)}")
         if sensor_error:
             actions.append("Sensorvalidering: outlier fundet")
         if enabled and provider_ready:
             allow_heat_pumps = (not price_awareness) or heat_pump_cheaper
+            thermostat_handover = bool(price_awareness and not allow_heat_pumps)
             low_confidence = self._ai_confidence < confidence_threshold
             if low_confidence:
                 actions.append(
                     f"Lav AI-konfidens ({round(self._ai_confidence,1)}% < {round(confidence_threshold,1)}%)"
                 )
             for room in rooms:
+                if not room.room_enabled:
+                    actions.append(f"{room.name}: AI rumstyring er slået fra")
+                    continue
                 rt = self._room_runtime.setdefault(
                     room.name,
                     {
@@ -798,8 +1087,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     },
                 )
 
-                is_garage_room = "garage" in room.name.lower()
-                eco_room_enabled = bool(is_garage_room and presence_eco_enabled)
+                eco_room_enabled = bool(presence_eco_enabled and room.presence_eco_enabled)
                 if eco_room_enabled:
                     room_occupied_now = bool(room.occupancy_active and not vacuum_running)
                     if room_occupied_now:
@@ -815,7 +1103,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         enabled
                         and not rt.get("eco_active", False)
                         and not room_occupied_now
-                        and _minutes_since(rt.get("room_empty_since"), now_ts) >= presence_away_min
+                        and _minutes_since(rt.get("room_empty_since"), now_ts) >= room.presence_away_min
                     ):
                         rt["eco_active"] = True
                         rt["eco_last_change"] = now_ts
@@ -825,37 +1113,33 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             rt["eco_prev_radiator_target"] = _safe_float(
                                 rad_state.attributes.get("temperature") if rad_state else None
                             )
-                        if room.target_number_entity:
-                            await self._async_set_input_number_if_needed(
-                                room.target_number_entity,
-                                eco_target,
-                                actions,
-                            )
-                        actions.append(f"{room.name}: eco aktiv via manglende presence")
+                        actions.append(f"{room.name}: eco aktiv via manglende presence (AI-mål beholdes)")
 
                     if (
                         rt.get("eco_active", False)
                         and (
-                            (room_occupied_now and _minutes_since(rt.get("room_occupied_since"), now_ts) >= presence_return_min)
+                            (room_occupied_now and _minutes_since(rt.get("room_occupied_since"), now_ts) >= room.presence_return_min)
                             or not enabled
                             or not presence_eco_enabled
                         )
                     ):
-                        restore_target = _safe_float(rt.get("eco_comfort_target"))
-                        if restore_target is not None and room.target_number_entity:
-                            await self._async_set_input_number_if_needed(
-                                room.target_number_entity,
-                                restore_target,
-                                actions,
-                            )
                         restore_rad = _safe_float(rt.get("eco_prev_radiator_target"))
                         if restore_rad is not None and room.radiators:
                             await self._async_set_temperature_if_needed(room.radiators[0], restore_rad, actions)
                         rt["eco_active"] = False
                         rt["eco_last_change"] = now_ts
-                        actions.append(f"{room.name}: eco afsluttet og komfort gendannet")
+                        actions.append(f"{room.name}: eco afsluttet (AI-mål var uændret)")
+                elif rt.get("eco_active", False):
+                    # If eco is active and the room/global eco toggle is turned off,
+                    # clear eco state immediately for predictable behavior.
+                    restore_rad = _safe_float(rt.get("eco_prev_radiator_target"))
+                    if restore_rad is not None and room.radiators:
+                        await self._async_set_temperature_if_needed(room.radiators[0], restore_rad, actions)
+                    rt["eco_active"] = False
+                    rt["eco_last_change"] = now_ts
+                    actions.append(f"{room.name}: eco slået fra")
 
-                if room.opening_active:
+                if room.opening_active and room.opening_pause_enabled:
                     rt["closed_since"] = None
                     if rt["open_since"] is None:
                         rt["open_since"] = now_ts
@@ -875,6 +1159,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 rt["open_since"] = None
                 if rt["closed_since"] is None:
                     rt["closed_since"] = now_ts
+
+                if room.heat_pump and rt["paused_by_open"] and not room.opening_pause_enabled:
+                    restore = str(rt.get("last_hvac_mode", "heat"))
+                    if restore not in {"heat", "cool", "auto", "dry", "fan_only", "heat_cool"}:
+                        restore = "heat"
+                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode(restore), actions)
+                    rt["paused_by_open"] = False
+                    rt["last_switch"] = now_ts
 
                 if room.heat_pump and rt["paused_by_open"]:
                     if _minutes_since(rt["closed_since"], now_ts) >= room.resume_after_closed_min:
@@ -903,10 +1195,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
                 error = room.target - room.temperature
+                effective_deficit = room.deficit
+                shared_demand_rooms: list[RoomSnapshot] = []
+                if room.link_group:
+                    shared_demand_rooms.extend(
+                        [r for r in rooms if r.name != room.name and r.link_group == room.link_group]
+                    )
+                if room.heat_pump:
+                    hp_slug = _slug_text(str(room.heat_pump).split(".", 1)[-1])
+                    for slug, r in room_slug_map.items():
+                        if r.name == room.name:
+                            continue
+                        if slug and slug in hp_slug and r not in shared_demand_rooms:
+                            shared_demand_rooms.append(r)
+                if shared_demand_rooms:
+                    effective_deficit = max([room.deficit] + [r.deficit for r in shared_demand_rooms])
                 hp_boost = 0.0
-                if room.deficit >= 1.2:
+                if effective_deficit >= 1.2:
                     hp_boost = 2.0
-                elif room.deficit >= 0.5:
+                elif effective_deficit >= 0.5:
                     hp_boost = 1.0
                 hp_boost = round(hp_boost * self._ai_factor, 1)
 
@@ -940,15 +1247,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     hp_target = round(room.target, decimals)
 
                 allow_start = (
-                    room.deficit >= start_threshold
+                    effective_deficit >= start_threshold
                     and allow_heat_pumps
                     and not massive_overheat_active
                 )
+                room_hybrid_takeover_heat = bool(
+                    thermostat_handover
+                    and room.heat_pump
+                    and effective_deficit >= start_threshold
+                    and not massive_overheat_active
+                )
+                if room_hybrid_takeover_heat:
+                    allow_start = True
                 if low_confidence:
-                    allow_start = False
+                    # Fail soft: keep deterministic heating control active.
+                    # We only reduce AI aggressiveness, never block basic heat demand.
+                    hp_boost = 0.0
                 last_switch = rt.get("last_switch")
                 if allow_start:
-                    if _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min and room.deficit < room.quick_start_deficit_c:
+                    if _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min and effective_deficit < room.quick_start_deficit_c:
                         allow_start = False
 
                 if room.heat_pump:
@@ -960,7 +1277,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                         await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                         await self._async_set_temperature_if_needed(room.heat_pump, hp_target, actions)
-                    elif massive_overheat_active or room.surplus >= stop_threshold or (price_awareness and not allow_heat_pumps):
+                    elif massive_overheat_active or room.surplus >= stop_threshold or (
+                        price_awareness and not allow_heat_pumps and not room_hybrid_takeover_heat
+                    ):
                         await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
                     elif low_confidence and _minutes_since(rt.get("last_switch"), now_ts) >= revert_timeout_min:
                         await self._async_set_temperature_if_needed(room.heat_pump, round(room.target, decimals), actions)
@@ -973,12 +1292,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             and not room.occupancy_active
                             and not vacuum_running
                             and _minutes_since(rt.get("last_switch"), now_ts) >= 3
-                            and room.temperature < (eco_target - 0.2)
+                            and room.temperature < (room.eco_target - 0.2)
                         ):
                             await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                             actions.append(f"{room.name}: eco failsafe tændte varmepumpe")
 
-                    if learning_enabled:
+                    if learning_enabled and room.learning_enabled:
                         hp_state = self.hass.states.get(room.heat_pump)
                         hp_is_heat = bool(hp_state and hp_state.state == "heat")
                         if room.surplus >= 1.2 and hp_is_heat:
@@ -998,12 +1317,37 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             rt["learn_stop_offset"] = min(0.6, float(rt.get("learn_stop_offset", 0.0)) + 0.1)
                             rt["learn_cold_hits"] = 0
 
+                if thermostat_handover:
+                    if room.heat_pump and not room_hybrid_takeover_heat:
+                        await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                    if room_hybrid_takeover_heat:
+                        actions.append(
+                            f"{room.name}: hybrid takeover (AC prioriteret pga. aktuelt underskud)"
+                        )
+                        if shared_demand_rooms:
+                            demand_names = ", ".join(r.name for r in shared_demand_rooms if r.deficit > 0)
+                            if demand_names:
+                                actions.append(f"{room.name}: delt varmebehov fra {demand_names}")
+                    else:
+                        actions.append(f"{room.name}: thermostat takeover (AC dyrere end alternativ)")
+
                 rad_target = round(
                     max(7.0, min(25.0, (room.target - radiator_setback) + (radiator_boost if (room.deficit > 0 and linked_hot) else 0))),
                     decimals,
                 )
+                if thermostat_handover:
+                    if room.heat_pump:
+                        # In hybrid takeover, keep radiator lower so heat pump remains primary.
+                        rad_target = round(max(7.0, min(25.0, room.target - 1.0)), decimals)
+                        actions.append(
+                            f"{room.name}: radiator backup sat lavere ({rad_target}°C) for varmepumpe-prioritet"
+                        )
+                    else:
+                        # Rooms without heat pump: radiator follows AI target directly.
+                        rad_target = round(max(7.0, min(25.0, room.target)), decimals)
+                        actions.append(f"{room.name}: radiator mål sat til AI-mål ({rad_target}°C)")
                 if eco_room_enabled and rt.get("eco_active", False):
-                    hard_floor = eco_target - 1.2
+                    hard_floor = room.eco_target - 1.2
                     if room.temperature < hard_floor:
                         guard_target = round(min(hard_floor + 0.5, 21.0), decimals)
                         if guard_target > rad_target:
@@ -1025,6 +1369,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
         elif enabled and not provider_ready:
             actions.append("AI provider ikke klar - styring pauset")
+
+        if not enabled:
+            # Global AI-styring er slået fra:
+            # - AC/varmepumper styres ikke.
+            # - Radiator-termostater (fx Better Thermostat) følger fortsat AI-rummål.
+            for room in rooms:
+                if room.target is None:
+                    continue
+                rad_target = round(max(7.0, min(25.0, room.target)), decimals)
+                for rad in room.radiators:
+                    await self._async_set_temperature_if_needed(rad, rad_target, actions)
+            if actions:
+                actions.append("AI OFF: radiatorer følger AI-mål, AC styres manuelt")
 
         if enabled and provider_ready and _minutes_since(self._runtime_events.get("last_control_activity"), now_ts) >= 30:
             coldest = next((r for r in sorted(rooms, key=lambda x: x.deficit, reverse=True) if r.heat_pump), None)
@@ -1098,6 +1455,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pid_offset_max_c": pid_offset_max_c,
             "learning_enabled": learning_enabled,
             "learning_last_changed": _fmt_ts(self._runtime_events.get("learning_last_changed")),
+            "manual_ai_last_trigger": _fmt_ts(self._runtime_events.get("manual_ai_last_trigger")),
+            "manual_report_last_trigger": _fmt_ts(self._runtime_events.get("manual_report_last_trigger")),
             "learning_status": "Aktiv" if learning_enabled else "Inaktiv",
             "vacuum_running": vacuum_running,
             "target_base": round(target_base, decimals),
@@ -1111,7 +1470,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "cheapest_alt_name": cheapest_alt_name,
             "estimated_savings_per_kwh": estimated_savings_per_kwh,
             "estimated_daily_savings": estimated_daily_savings,
+            "estimated_monthly_savings": estimated_monthly_savings,
             "price_awareness": price_awareness,
+            "thermostat_handover": thermostat_handover,
             "sensor_error": sensor_error,
             "legacy_conflicts": legacy_conflicts,
             "flow_limited": flow_limited,
@@ -1125,26 +1486,66 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "max_deficit": round(max_deficit, decimals),
             "max_surplus": round(max_surplus, decimals),
             "unavailable_sensors": unavailable,
-            "rooms": [
-                {
-                    "name": r.name,
-                    "sensor": r.sensor_entity,
-                    "temperature_raw": round(r.raw_temperature, decimals),
-                    "temperature": round(r.temperature, decimals),
-                    "target": round(r.target, decimals),
-                    "deficit": round(r.deficit, decimals),
-                    "surplus": round(r.surplus, decimals),
-                    "opening_active": r.opening_active,
-                    "occupancy_active": r.occupancy_active,
-                    "heat_pump": r.heat_pump,
-                    "radiators": r.radiators,
-                    "link_group": r.link_group,
-                    "eco_active": bool(self._room_runtime.get(r.name, {}).get("eco_active", False)),
-                }
-                for r in rooms
-            ],
+            "rooms": [self._build_room_state_payload(r, decimals) for r in rooms],
             "actions": actions[-25:],
             "report": report,
+        }
+
+    def _build_room_state_payload(self, room: RoomSnapshot, decimals: int) -> dict[str, Any]:
+        active_entities: list[str] = []
+        active_names: list[str] = []
+
+        def _add_if_active(entity_id: str) -> None:
+            st = self.hass.states.get(entity_id)
+            if not st:
+                return
+            hvac_action = str(st.attributes.get("hvac_action", "")).lower()
+            state = str(st.state).lower()
+            is_active = hvac_action in {"heating", "preheating"} or (state == "heat" and hvac_action == "")
+            if not is_active:
+                return
+            active_entities.append(entity_id)
+            active_names.append(str(st.attributes.get("friendly_name") or entity_id))
+
+        if room.heat_pump:
+            _add_if_active(room.heat_pump)
+        for rad in room.radiators:
+            _add_if_active(rad)
+
+        active_summary = ", ".join(active_names) if active_names else "Ingen aktiv varmekilde"
+        control_entities = ([room.heat_pump] if room.heat_pump else []) + list(room.radiators)
+
+        return {
+            "name": room.name,
+            "sensor": room.sensor_entity,
+            "temperature_raw": round(room.raw_temperature, decimals),
+            "temperature": round(room.temperature, decimals),
+            "target": round(room.target, decimals),
+            "deficit": round(room.deficit, decimals),
+            "surplus": round(room.surplus, decimals),
+            "opening_active": room.opening_active,
+            "occupancy_active": room.occupancy_active,
+            "presence_eco_enabled": room.presence_eco_enabled,
+            "eco_target": round(room.eco_target, decimals),
+            "presence_away_min": round(room.presence_away_min, 1),
+            "presence_return_min": round(room.presence_return_min, 1),
+            "learning_enabled": room.learning_enabled,
+            "opening_pause_enabled": room.opening_pause_enabled,
+            "room_enabled": room.room_enabled,
+            "target_number_entity": room.target_number_entity,
+            "heat_pump": room.heat_pump,
+            "radiators": room.radiators,
+            "control_entities": control_entities,
+            "link_group": room.link_group,
+            "eco_active": bool(self._room_runtime.get(room.name, {}).get("eco_active", False)),
+            "boost_active": room.boost_active,
+            "boost_delta_c": room.boost_delta_c,
+            "boost_duration_min": room.boost_duration_min,
+            "boost_until": _fmt_ts(room.boost_until_ts),
+            "active_heat_entities": active_entities,
+            "active_heat_names": active_names,
+            "active_heat_summary": active_summary,
+            "is_heating_now": bool(active_entities),
         }
 
     def _build_report(
@@ -1189,14 +1590,93 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ]
         if actions:
             bullets.append(f"Seneste handling: {actions[-1]}")
-        long_report = ai_report_text.strip() if ai_report_text and ai_report_text.strip() else "Omhandler:\n" + "\n".join(
-            f"- {b}" for b in bullets
-        )
+        cleaned_report = self._normalize_report_text(ai_report_text)
+        long_report = cleaned_report if cleaned_report else "Omhandler:\n" + "\n".join(f"- {b}" for b in bullets)
         return {
             "short": " | ".join(bullets[:3]),
             "long": long_report,
             "bullets": bullets,
         }
+
+    def _normalize_report_text(self, text: str) -> str:
+        """Normalize AI report text to stable Danish bullet format."""
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        # Common mojibake repair pass.
+        repairs = {
+            "Ã¦": "æ",
+            "Ã¸": "ø",
+            "Ã¥": "å",
+            "Ã†": "Æ",
+            "Ã˜": "Ø",
+            "Ã…": "Å",
+            "Â°": "°",
+            "Â": "",
+        }
+        for bad, good in repairs.items():
+            raw = raw.replace(bad, good)
+
+        raw = raw.strip("` \n\r\t")
+        # Hard reject obviously broken/JSON-garbage payloads.
+        if raw.count("{") + raw.count("}") >= 4 and raw.count("- ") == 0:
+            return ""
+
+        # If model returned JSON-ish text, extract meaningful fields.
+        maybe_json = raw
+        if "{" in raw and "}" in raw:
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if end > start:
+                maybe_json = raw[start : end + 1]
+        if maybe_json.startswith("{") and maybe_json.endswith("}"):
+            try:
+                data = json.loads(maybe_json)
+                if isinstance(data, dict):
+                    preferred = (
+                        data.get("long")
+                        or data.get("omhandler")
+                        or data.get("report")
+                        or data.get("summary")
+                        or data.get("text")
+                    )
+                    if isinstance(preferred, str) and preferred.strip():
+                        raw = preferred.strip()
+                    elif isinstance(data.get("punkter"), list):
+                        points = [str(x).strip() for x in data["punkter"] if str(x).strip()]
+                        if points:
+                            raw = "Omhandler:\n" + "\n".join(f"- {p}" for p in points[:8])
+            except Exception:  # noqa: BLE001
+                pass
+
+        lines = [ln.strip() for ln in re.split(r"[\r\n]+", raw) if ln.strip()]
+        if not lines:
+            return ""
+
+        if lines[0].lower().startswith("omhandler"):
+            body = []
+            for ln in lines[1:]:
+                ln2 = re.sub(r"^[-•\d\.\)\s]+", "", ln).strip()
+                if ln2:
+                    body.append(ln2)
+            if not body:
+                return ""
+            return "Omhandler:\n" + "\n".join(f"- {b}" for b in body[:8])
+
+        body = []
+        for ln in lines:
+            ln2 = re.sub(r"^[-•\d\.\)\s]+", "", ln).strip()
+            # Drop garbage-looking fragments.
+            if not re.search(r"[A-Za-zÆØÅæøå0-9]", ln2):
+                continue
+            if len(re.sub(r"[A-Za-zÆØÅæøå0-9]", "", ln2)) > len(ln2) * 0.55:
+                continue
+            if ln2:
+                body.append(ln2)
+        if not body:
+            return ""
+        return "Omhandler:\n" + "\n".join(f"- {b}" for b in body[:8])
 
     async def _async_set_hvac_mode_if_needed(self, climate_entity: str, mode: HVACMode, actions: list[str]) -> None:
         state = self.hass.states.get(climate_entity)

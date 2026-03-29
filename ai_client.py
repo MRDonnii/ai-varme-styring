@@ -37,7 +37,7 @@ class AiProviderClient:
         )
         try:
             if provider == AI_PROVIDER_OLLAMA:
-                text = await self._async_call_ollama(endpoint, model, prompt)
+                text = await self._async_call_ollama(endpoint, model, prompt, expect_json=True)
             elif provider == AI_PROVIDER_GEMINI:
                 text = await self._async_call_gemini(api_key, model, prompt)
             else:
@@ -83,10 +83,12 @@ class AiProviderClient:
             LOGGER.debug("AI report fallback: %s", err)
         return ""
 
-    async def _async_call_ollama(self, endpoint: str, model: str, prompt: str) -> str:
+    async def _async_call_ollama(self, endpoint: str, model: str, prompt: str, *, expect_json: bool = False) -> str:
         session = async_get_clientsession(self.hass)
         url = endpoint.rstrip("/") + "/api/generate"
-        payload = {"model": model, "prompt": prompt, "stream": False, "format": "json"}
+        payload = {"model": model, "prompt": prompt, "stream": False}
+        if expect_json:
+            payload["format"] = "json"
         async with session.post(url, json=payload, timeout=30) as resp:
             resp.raise_for_status()
             data = await resp.json()

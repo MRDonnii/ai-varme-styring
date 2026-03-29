@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import re
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
+    CONF_ROOMS,
+    CONF_ROOM_NAME,
     DOMAIN,
     RUNTIME_ENABLED,
     RUNTIME_LEARNING_ENABLED,
@@ -22,14 +27,28 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            AiVarmeEnabledSwitch(data["coordinator"], entry),
-            AiVarmePresenceEcoSwitch(data["coordinator"], entry),
-            AiVarmePidLayerSwitch(data["coordinator"], entry),
-            AiVarmeLearningSwitch(data["coordinator"], entry),
-        ]
-    )
+    entities: list[SwitchEntity] = [
+        AiVarmeEnabledSwitch(data["coordinator"], entry),
+        AiVarmePresenceEcoSwitch(data["coordinator"], entry),
+        AiVarmePidLayerSwitch(data["coordinator"], entry),
+        AiVarmeLearningSwitch(data["coordinator"], entry),
+    ]
+    cfg = {**entry.data, **entry.options}
+    for room_cfg in cfg.get(CONF_ROOMS, []):
+        room_name = str(room_cfg.get(CONF_ROOM_NAME, "")).strip()
+        if not room_name:
+            continue
+        entities.append(AiVarmeRoomEnabledSwitch(data["coordinator"], entry, room_name))
+        entities.append(AiVarmeRoomPresenceEcoSwitch(data["coordinator"], entry, room_name))
+        entities.append(AiVarmeRoomOpeningPauseSwitch(data["coordinator"], entry, room_name))
+    async_add_entities(entities)
+
+
+def _room_slug(room_name: str) -> str:
+    normalized = room_name.lower()
+    normalized = normalized.replace("æ", "ae").replace("ø", "oe").replace("å", "aa")
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    return normalized or "rum"
 
 
 class AiVarmeEnabledSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
@@ -204,3 +223,95 @@ class AiVarmeLearningSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
             "sidst_skiftet": data.get("learning_last_changed"),
             "learning_status": data.get("learning_status"),
         }
+
+
+class AiVarmeRoomSwitchBase(AiVarmeBaseEntity, SwitchEntity):
+    """Base class for per-room switches."""
+
+    def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
+        super().__init__(coordinator, entry)
+        self._room_name = room_name
+        self._room_slug = _room_slug(room_name)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{entry.entry_id}_room_{self._room_slug}")},
+            name=f"{entry.title} • {room_name}",
+            manufacturer="Local",
+            model="AI Varme Styring Rum",
+            via_device=(DOMAIN, entry.entry_id),
+        )
+
+    def _room_data(self) -> dict:
+        rooms = (self.coordinator.data or {}).get("rooms", [])
+        for room in rooms:
+            if str(room.get("name", "")).strip().lower() == self._room_name.lower():
+                return room
+        return {}
+
+
+class AiVarmeRoomPresenceEcoSwitch(AiVarmeRoomSwitchBase):
+    """Enable/disable auto eco by room."""
+
+    _attr_icon = "mdi:leaf-circle-outline"
+
+    def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
+        super().__init__(coordinator, entry, room_name)
+        self._attr_name = f"{room_name} Auto-Eco"
+        self._attr_unique_id = f"{entry.entry_id}_room_{self._room_slug}_auto_eco"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._room_data().get("presence_eco_enabled", False))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_room_presence_eco_enabled(self._room_name, True)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_room_presence_eco_enabled(self._room_name, False)
+        await self.coordinator.async_request_refresh()
+
+
+class AiVarmeRoomEnabledSwitch(AiVarmeRoomSwitchBase):
+    """Enable/disable AI control for a specific room."""
+
+    _attr_icon = "mdi:home-cog-outline"
+
+    def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
+        super().__init__(coordinator, entry, room_name)
+        self._attr_name = f"{room_name} AI rumstyring"
+        self._attr_unique_id = f"{entry.entry_id}_room_{self._room_slug}_enabled"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._room_data().get("room_enabled", True))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_room_enabled(self._room_name, True)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_room_enabled(self._room_name, False)
+        await self.coordinator.async_request_refresh()
+
+
+class AiVarmeRoomOpeningPauseSwitch(AiVarmeRoomSwitchBase):
+    """Enable/disable opening pause by room."""
+
+    _attr_icon = "mdi:door-sliding-lock"
+
+    def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
+        super().__init__(coordinator, entry, room_name)
+        self._attr_name = f"{room_name} Vinduespause"
+        self._attr_unique_id = f"{entry.entry_id}_room_{self._room_slug}_opening_pause"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._room_data().get("opening_pause_enabled", True))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_room_opening_pause_enabled(self._room_name, True)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_room_opening_pause_enabled(self._room_name, False)
+        await self.coordinator.async_request_refresh()

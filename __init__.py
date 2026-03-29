@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DEFAULT_ECO_TARGET_C,
@@ -57,6 +58,20 @@ from .const import (
 from .coordinator import AiVarmeCoordinator
 
 
+async def _async_remove_deprecated_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove legacy master-level entities that were moved to room level."""
+    registry = er.async_get(hass)
+    deprecated_unique_ids = {
+        f"{entry.entry_id}_global_target",
+        f"{entry.entry_id}_eco_target",
+        f"{entry.entry_id}_presence_away_min",
+        f"{entry.entry_id}_presence_return_min",
+    }
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if ent.unique_id in deprecated_unique_ids:
+            registry.async_remove(ent.entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AI Varme Styring from config entry."""
     cfg = {**entry.data, **entry.options}
@@ -102,6 +117,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = AiVarmeCoordinator(hass, entry)
     hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
     await coordinator.async_config_entry_first_refresh()
+    await _async_remove_deprecated_entities(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(
         entry, [Platform(p) for p in PLATFORMS]
