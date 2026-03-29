@@ -1,24 +1,59 @@
 # AI Varme Styring
 
-`AI Varme Styring` is a custom Home Assistant integration for room-by-room heating control with price-aware logic, presence eco behavior, and an optional PID layer.
-Release notes are documented in `CHANGELOG.md`.
+AI Varme Styring is a custom Home Assistant integration for deterministic room-first heating control.
+It is designed for mixed systems with heat pumps and radiators, and it keeps room comfort as the primary objective while still optimizing energy source choices.
 
-## Note
+Release history is maintained in CHANGELOG.md.
 
-This project is primarily built for my own Home Assistant installation.
-There is no guarantee of ongoing development or broad compatibility across other setups.
+## Project note
 
-## What it does
+This project is primarily built and validated on my own Home Assistant installation.
+It can be reused in other setups, but you should expect environment-specific tuning.
 
-- Controls heating per room using dedicated sensors, setpoints, and devices.
-- Supports both heat pump and radiator in the same room.
-- Uses an AI provider for decision factor generation:
+## What the integration does
+
+- Controls each room independently with room-level target ownership.
+- Supports hybrid rooms with both heat pump and radiator.
+- Supports radiator-only rooms without forcing global setback behavior.
+- Uses price-aware source selection between electricity and alternative heat source.
+- Adds optional AI factor and reporting (Ollama or Gemini).
+- Includes optional runtime features such as Presence Eco and PID layer.
+- Exposes runtime controls and diagnostics as entities for dashboards and tuning.
+
+## Core control model
+
+- Room-first targeting:
+  - The room AI target is authoritative for room decisions.
+  - Global values are not allowed to unintentionally override room comfort.
+- Hybrid handover:
+  - During source handover scenarios, radiator behavior follows room intent.
+  - Sustained deficit assist can increase radiator support for prolonged deficits.
+- Fallback behavior:
+  - If legacy helpers are missing, runtime target overrides keep control stable.
+  - Sensor and helper resolution is defensive to avoid hard failures.
+
+## Price and source selection
+
+- If available, COP and boiler-aware heat-price sensors are prioritized.
+- Internal fallback calculations are used when external price sensors are missing.
+- Source switching is designed for stable comfort during changing prices and demand.
+
+## AI and reporting
+
+- AI provider options:
   - Ollama
   - Gemini
-- Uses price-aware operation with electricity price and alternative heat source price (gas or district heating).
-- Supports Presence Eco windows (away/return) to lower targets when the house is empty.
-- Includes an optional PID layer on top of standard control, toggleable at runtime.
-- Exposes status and reporting sensors for dashboards.
+- AI is used as a decision modifier, not as uncontrolled authority.
+- Reporting stays room-focused and avoids reintroducing global-side effects.
+
+## Runtime features
+
+- Presence Eco with away and return timing windows.
+- Optional PID layer for smoothing and precision.
+- Learning mode for adaptive behavior over time.
+- Per-room opening timing controls:
+  - Pause after opening (minutes)
+  - Resume after closing (minutes)
 
 ## Entities created by the integration
 
@@ -28,33 +63,51 @@ There is no guarantee of ongoing development or broad compatibility across other
   - PID layer active
   - Learning mode active
 - Number entities:
-  - Global AI target
-  - Eco AI target
-  - Presence and PID tuning values
+  - Global target and eco target
+  - Presence timing values
+  - PID tuning values
   - Confidence threshold and revert timeout
+  - Per-room timing and boost controls
+- Buttons:
+  - Run AI review now
+  - Run AI report now
+  - Apply room boost now
 - Sensors:
   - AI status
   - Cheapest heat source
   - Largest deficit
   - PID layer status
   - AI report
-  - Analysis sensors (cold rooms, focus room, house level, etc.)
+  - Analysis sensors such as cold rooms, focus room, and house level
 
 ## Setup
 
-1. Install the integration as a custom component.
-2. Add the integration in Home Assistant.
+1. Install as a custom component in Home Assistant.
+2. Add the integration from Devices and Services.
 3. Select AI provider and global sensors.
-4. Add the rooms you want to control (only selected rooms are managed).
-5. Fine-tune thresholds and enable Presence Eco and PID layer if needed.
+4. Add rooms that should be controlled.
+5. Validate switch states and room sensors.
+6. Tune runtime numbers for your house.
 
-## Status
+## Migration and standalone mode
 
-Current repo release notes: `v0.1.3` (see `CHANGELOG.md`).
+This integration is designed to run standalone without legacy automation control loops.
+For migration steps, see MIGRATION_STANDALONE.md.
 
-## Standalone migration
+## Dashboard and operations
 
-The integration is designed to run without legacy heat-pump automations.
-See the migration guide:
+- Put status, report, and key runtime controls on one operations view.
+- Keep per-room controls visible for quick troubleshooting.
+- Use AI status and analysis sensors to detect migration conflicts or sensor issues.
 
-- `MIGRATION_STANDALONE.md`
+## Current status
+
+Current documented release: v0.1.5.
+See CHANGELOG.md for full release details.
+
+## Release process note
+
+README should be updated on every release together with CHANGELOG so GitHub always reflects:
+- What changed
+- Why it changed
+- Which user-facing features and controls are available
