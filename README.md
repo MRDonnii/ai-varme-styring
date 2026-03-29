@@ -65,6 +65,7 @@ It can be reused in other setups, but you should expect environment-specific tun
 
 - Switches:
   - Active control
+  - AI room control all rooms (main device)
   - Presence eco active
   - PID layer active
   - Learning mode active
@@ -115,8 +116,13 @@ For migration steps, see MIGRATION_STANDALONE.md.
 
 ## Current status
 
-Current documented release: v0.1.7.
+Current documented release: v0.1.9.
 See CHANGELOG.md for full release details.
+
+## Brand assets
+
+- Integration icon: `icon.svg`
+- Integration logo: `logo.svg`
 
 ## Release process note
 

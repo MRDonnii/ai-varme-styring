@@ -2,6 +2,26 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.9
+
+Date: 2026-03-29
+
+### Added
+- Added new main-device switch:
+  - `switch.ai_varme_styring_ai_rumstyring_alle_rum`
+  - Toggles AI room control on/off for all configured rooms in one action.
+- Added integration brand assets:
+  - `icon.svg`
+  - `logo.svg`
+
+### Fixed
+- Fixed monthly savings compatibility behavior:
+  - `sensor.ai_varme_besparelse_maaned` now falls back to daily savings scaling when the direct monthly source is zero/missing.
+  - Prevents monthly dashboard cards from showing empty/flat output while daily savings is present.
+
+### Changed
+- Removed temporary package-level all-room helper approach in favor of integration-native control in the AI main device.
+
 ## v0.1.8
 
 Date: 2026-03-29

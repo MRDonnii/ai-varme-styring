@@ -612,6 +612,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rt["room_enabled_last_changed"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
 
+    async def async_set_all_rooms_enabled(self, enabled: bool) -> None:
+        cfg = {**self.entry.data, **self.entry.options}
+        now_ts = dt_util.utcnow().timestamp()
+        for room_cfg in cfg.get(CONF_ROOMS, []):
+            room_name = str(room_cfg.get(CONF_ROOM_NAME, "")).strip()
+            if not room_name:
+                continue
+            rt = self._room_runtime.setdefault(room_name, {})
+            rt["room_enabled_override"] = bool(enabled)
+            rt["room_enabled_last_changed"] = now_ts
+        self._runtime_events["all_rooms_enabled_last_changed"] = now_ts
+        await self._async_save_runtime()
+
     async def async_trigger_room_boost(
         self,
         room_name: str,
@@ -1655,6 +1668,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "provider_error_state": provider_error_state,
             "last_control_activity": _fmt_ts(self._runtime_events.get("last_control_activity")),
             "enabled_last_changed": _fmt_ts(self._runtime_events.get("enabled_last_changed")),
+            "all_rooms_enabled_last_changed": _fmt_ts(
+                self._runtime_events.get("all_rooms_enabled_last_changed")
+            ),
             "presence_eco_enabled": presence_eco_enabled,
             "presence_eco_active": presence_eco_active,
             "presence_eco_last_changed": _fmt_ts(

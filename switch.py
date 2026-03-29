@@ -29,6 +29,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     entities: list[SwitchEntity] = [
         AiVarmeEnabledSwitch(data["coordinator"], entry),
+        AiVarmeAllRoomsEnabledSwitch(data["coordinator"], entry),
         AiVarmePresenceEcoSwitch(data["coordinator"], entry),
         AiVarmePidLayerSwitch(data["coordinator"], entry),
         AiVarmeLearningSwitch(data["coordinator"], entry),
@@ -222,6 +223,48 @@ class AiVarmeLearningSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
         return {
             "sidst_skiftet": data.get("learning_last_changed"),
             "learning_status": data.get("learning_status"),
+        }
+
+
+class AiVarmeAllRoomsEnabledSwitch(AiVarmeBaseEntity, SwitchEntity):
+    """Enable/disable AI room control for all configured rooms."""
+
+    _attr_name = "AI rumstyring alle rum"
+    _attr_icon = "mdi:home-group-plus"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_all_rooms_enabled"
+
+    @property
+    def is_on(self) -> bool:
+        rooms = (self.coordinator.data or {}).get("rooms", [])
+        if not rooms:
+            return False
+        return all(bool(room.get("room_enabled", True)) for room in rooms)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_all_rooms_enabled(True)
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_all_rooms_enabled(False)
+        await self.coordinator.async_request_refresh()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int | list[str] | None]:
+        rooms = (self.coordinator.data or {}).get("rooms", [])
+        total = len(rooms)
+        enabled_names = [str(r.get("name", "")).strip() for r in rooms if bool(r.get("room_enabled", True))]
+        disabled_names = [
+            str(r.get("name", "")).strip() for r in rooms if not bool(r.get("room_enabled", True))
+        ]
+        return {
+            "rum_i_alt": total,
+            "rum_aktive": len(enabled_names),
+            "rum_deaktiverede": len(disabled_names),
+            "deaktiverede_rum": [n for n in disabled_names if n],
+            "sidst_skiftet": (self.coordinator.data or {}).get("all_rooms_enabled_last_changed"),
         }
 
 
