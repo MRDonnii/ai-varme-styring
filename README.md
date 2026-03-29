@@ -45,6 +45,10 @@ It can be reused in other setups, but you should expect environment-specific tun
   - Gemini
 - AI is used as a decision modifier, not as uncontrolled authority.
 - Reporting stays room-focused and avoids reintroducing global-side effects.
+- Includes long-horizon summary reporting sensors:
+  - `sensor.ai_varme_styring_garsdag_rapport`
+  - `sensor.ai_varme_styring_7_dage_rapport`
+- Persists rolling analytics samples for daily and weekly operational summaries.
 
 ## Runtime features
 
@@ -78,6 +82,8 @@ It can be reused in other setups, but you should expect environment-specific tun
   - Largest deficit
   - PID layer status
   - AI report
+  - Yesterday summary report
+  - 7-day summary report
   - Analysis sensors such as cold rooms, focus room, and house level
 
 ## Setup
@@ -99,10 +105,12 @@ For migration steps, see MIGRATION_STANDALONE.md.
 - Put status, report, and key runtime controls on one operations view.
 - Keep per-room controls visible for quick troubleshooting.
 - Use AI status and analysis sensors to detect migration conflicts or sensor issues.
+- Use daily and weekly summary sensors to validate source-priority behavior over time.
+- Track mode distribution (`AC`, `Gas`, `Mix`, `Klar`) and average source prices to evaluate cost impact.
 
 ## Current status
 
-Current documented release: v0.1.5.
+Current documented release: v0.1.6.
 See CHANGELOG.md for full release details.
 
 ## Release process note

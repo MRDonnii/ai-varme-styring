@@ -362,6 +362,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_ai_update = None
         self._last_report_update = None
         self._ai_report_text: str = ""
+        self._analytics_samples: list[dict[str, Any]] = []
         self._manual_baseline: dict[str, dict[str, Any]] = {}
         self._runtime_events: dict[str, float | None] = {
             "enabled_last_changed": None,
@@ -408,6 +409,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         last_ai = data.get("last_ai_update_ts")
         last_report = data.get("last_report_update_ts")
         report_text = data.get("ai_report_text")
+        analytics_samples = data.get("analytics_samples")
         if isinstance(factor, (int, float)):
             self._ai_factor = float(factor)
         if isinstance(reason, str):
@@ -420,6 +422,26 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_report_update = float(last_report)
         if isinstance(report_text, str):
             self._ai_report_text = report_text
+        if isinstance(analytics_samples, list):
+            cleaned: list[dict[str, Any]] = []
+            for row in analytics_samples:
+                if not isinstance(row, dict):
+                    continue
+                ts = row.get("ts")
+                if not isinstance(ts, (int, float)):
+                    continue
+                cleaned.append(
+                    {
+                        "ts": float(ts),
+                        "mode": str(row.get("mode", "Klar")),
+                        "el_price": _safe_float(row.get("el_price")),
+                        "gas_price": _safe_float(row.get("gas_price")),
+                        "district_heat_price": _safe_float(row.get("district_heat_price")),
+                        "gas_consumption": _safe_float(row.get("gas_consumption")),
+                        "district_heat_consumption": _safe_float(row.get("district_heat_consumption")),
+                    }
+                )
+            self._analytics_samples = cleaned
 
     async def _async_save_runtime(self) -> None:
         await self._store.async_save(
@@ -433,6 +455,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "last_ai_update_ts": self._last_ai_update,
                 "last_report_update_ts": self._last_report_update,
                 "ai_report_text": self._ai_report_text,
+                "analytics_samples": self._analytics_samples,
             }
         )
 
@@ -1466,6 +1489,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             weather_state = self.hass.states.get(cfg[CONF_WEATHER_ENTITY])
             outdoor_temp = _safe_float((weather_state.attributes if weather_state else {}).get("temperature"))
 
+        current_mode = self._compute_heating_mode_from_rooms(rooms)
+        self._append_analytics_sample(
+            now_ts=now_ts,
+            mode=current_mode,
+            el_price=el_price,
+            gas_price=gas_price,
+            district_heat_price=district_heat_price,
+            gas_consumption=gas_consumption,
+            district_heat_consumption=district_heat_consumption,
+        )
+        local_now = dt_util.as_local(now)
+        today_start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_start_local = today_start_local - timedelta(days=1)
+        week_start_ts = now_ts - (7 * 24 * 60 * 60)
+        yesterday_summary = self._build_period_summary(
+            yesterday_start_local.timestamp(), today_start_local.timestamp(), decimals
+        )
+        week_summary = self._build_period_summary(week_start_ts, now_ts, decimals)
+
         report = self._build_report(
             ai_provider=ai_provider,
             ai_model_fast=ai_model_fast,
@@ -1548,6 +1590,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "focus_room_delta": focus_room_delta,
             "extra_room": extra_room,
             "house_level": house_level,
+            "heating_mode": current_mode,
+            "summary_yesterday": yesterday_summary,
+            "summary_week": week_summary,
             "max_deficit": round(max_deficit, decimals),
             "max_surplus": round(max_surplus, decimals),
             "unavailable_sensors": unavailable,
@@ -1611,6 +1656,109 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "active_heat_names": active_names,
             "active_heat_summary": active_summary,
             "is_heating_now": bool(active_entities),
+        }
+
+    def _compute_heating_mode_from_rooms(self, rooms: list[RoomSnapshot]) -> str:
+        hp_active = False
+        rad_active = False
+        for room in rooms:
+            if room.heat_pump:
+                st = self.hass.states.get(room.heat_pump)
+                if st:
+                    action = str(st.attributes.get("hvac_action", "")).lower()
+                    mode = str(st.state).lower()
+                    if action in {"heating", "cooling"} or mode in {"heat", "cool", "fan_only"}:
+                        hp_active = True
+            for rad in room.radiators:
+                st = self.hass.states.get(rad)
+                if st and str(st.attributes.get("hvac_action", "")).lower() in {"heating", "preheating"}:
+                    rad_active = True
+        if hp_active and rad_active:
+            return "Mix"
+        if hp_active:
+            return "AC"
+        if rad_active:
+            return "Gas"
+        return "Klar"
+
+    def _append_analytics_sample(
+        self,
+        *,
+        now_ts: float,
+        mode: str,
+        el_price: float | None,
+        gas_price: float | None,
+        district_heat_price: float | None,
+        gas_consumption: float | None,
+        district_heat_consumption: float | None,
+    ) -> None:
+        interval_s = 15 * 60
+        keep_s = 8 * 24 * 60 * 60
+        if self._analytics_samples:
+            last_ts = float(self._analytics_samples[-1].get("ts", 0.0))
+            if (now_ts - last_ts) < interval_s:
+                return
+        self._analytics_samples.append(
+            {
+                "ts": now_ts,
+                "mode": mode,
+                "el_price": el_price,
+                "gas_price": gas_price,
+                "district_heat_price": district_heat_price,
+                "gas_consumption": gas_consumption,
+                "district_heat_consumption": district_heat_consumption,
+            }
+        )
+        cutoff = now_ts - keep_s
+        self._analytics_samples = [s for s in self._analytics_samples if float(s.get("ts", 0.0)) >= cutoff]
+
+    def _build_period_summary(self, start_ts: float, end_ts: float, decimals: int) -> dict[str, Any]:
+        samples = [s for s in self._analytics_samples if start_ts <= float(s.get("ts", 0.0)) <= end_ts]
+        mode_hours = {"AC": 0.0, "Gas": 0.0, "Mix": 0.0, "Klar": 0.0}
+        if len(samples) >= 2:
+            for cur, nxt in zip(samples[:-1], samples[1:]):
+                ts0 = float(cur.get("ts", 0.0))
+                ts1 = float(nxt.get("ts", 0.0))
+                if ts1 <= ts0:
+                    continue
+                dt_h = (ts1 - ts0) / 3600.0
+                mode = str(cur.get("mode", "Klar"))
+                if mode not in mode_hours:
+                    mode = "Klar"
+                mode_hours[mode] += dt_h
+
+        def _mean(key: str) -> float | None:
+            vals = [_safe_float(s.get(key)) for s in samples]
+            vals = [v for v in vals if v is not None]
+            if not vals:
+                return None
+            return round(sum(vals) / len(vals), decimals)
+
+        def _delta(key: str) -> float | None:
+            vals = [(_safe_float(s.get(key)), float(s.get("ts", 0.0))) for s in samples]
+            vals = [(v, ts) for v, ts in vals if v is not None]
+            if len(vals) < 2:
+                return None
+            vals.sort(key=lambda x: x[1])
+            d = vals[-1][0] - vals[0][0]
+            if d < 0:
+                return None
+            return round(d, decimals)
+
+        avg_el = _mean("el_price")
+        avg_gas = _mean("gas_price")
+        avg_dh = _mean("district_heat_price")
+        gas_cons = _delta("gas_consumption")
+        dh_cons = _delta("district_heat_consumption")
+        gas_cost = round(gas_cons * avg_gas, decimals) if gas_cons is not None and avg_gas is not None else None
+        dh_cost = round(dh_cons * avg_dh, decimals) if dh_cons is not None and avg_dh is not None else None
+
+        return {
+            "sample_count": len(samples),
+            "mode_hours": {k: round(v, 1) for k, v in mode_hours.items()},
+            "avg_prices": {"el": avg_el, "gas": avg_gas, "district_heat": avg_dh},
+            "consumption": {"gas": gas_cons, "district_heat": dh_cons},
+            "cost": {"gas": gas_cost, "district_heat": dh_cost},
         }
 
     def _build_report(

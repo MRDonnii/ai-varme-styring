@@ -33,6 +33,8 @@ async def async_setup_entry(
         AiVarmeHouseLevelSensor(data["coordinator"], entry),
         AiVarmePidStatusSensor(data["coordinator"], entry),
         AiVarmeReportSensor(data["coordinator"], entry),
+        AiVarmeYesterdaySummarySensor(data["coordinator"], entry),
+        AiVarmeWeekSummarySensor(data["coordinator"], entry),
     ]
     cfg = {**entry.data, **entry.options}
     rooms = cfg.get("rooms", [])
@@ -527,6 +529,70 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),
             "estimeret_dagsbesparelse": data.get("estimated_daily_savings"),
             "opdateret": data.get("updated_at"),
+        }
+
+
+class AiVarmeYesterdaySummarySensor(AiVarmeBaseEntity, SensorEntity):
+    """Yesterday operational summary."""
+
+    _attr_name = "Gårsdag rapport"
+    _attr_icon = "mdi:calendar-today"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_summary_yesterday"
+
+    @property
+    def native_value(self) -> str:
+        data = (self.coordinator.data or {}).get("summary_yesterday", {})
+        hours = data.get("mode_hours", {})
+        ac = float(hours.get("AC", 0.0))
+        gas = float(hours.get("Gas", 0.0))
+        mix = float(hours.get("Mix", 0.0))
+        return f"AC {ac:.1f}h | Gas {gas:.1f}h | Mix {mix:.1f}h"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = (self.coordinator.data or {}).get("summary_yesterday", {})
+        return {
+            "mode_timer": data.get("mode_hours", {}),
+            "gennemsnit_priser": data.get("avg_prices", {}),
+            "forbrug": data.get("consumption", {}),
+            "estimeret_kost": data.get("cost", {}),
+            "samples": data.get("sample_count", 0),
+            "opdateret": (self.coordinator.data or {}).get("updated_at"),
+        }
+
+
+class AiVarmeWeekSummarySensor(AiVarmeBaseEntity, SensorEntity):
+    """Rolling 7-day operational summary."""
+
+    _attr_name = "7 dage rapport"
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_summary_week"
+
+    @property
+    def native_value(self) -> str:
+        data = (self.coordinator.data or {}).get("summary_week", {})
+        hours = data.get("mode_hours", {})
+        ac = float(hours.get("AC", 0.0))
+        gas = float(hours.get("Gas", 0.0))
+        mix = float(hours.get("Mix", 0.0))
+        return f"AC {ac:.1f}h | Gas {gas:.1f}h | Mix {mix:.1f}h"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        data = (self.coordinator.data or {}).get("summary_week", {})
+        return {
+            "mode_timer": data.get("mode_hours", {}),
+            "gennemsnit_priser": data.get("avg_prices", {}),
+            "forbrug": data.get("consumption", {}),
+            "estimeret_kost": data.get("cost", {}),
+            "samples": data.get("sample_count", 0),
+            "opdateret": (self.coordinator.data or {}).get("updated_at"),
         }
 
 

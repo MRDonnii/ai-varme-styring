@@ -2,6 +2,24 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.6
+
+Date: 2026-03-29
+
+### Added
+- Added two new long-horizon report sensors:
+  - `sensor.ai_varme_styring_garsdag_rapport`
+  - `sensor.ai_varme_styring_7_dage_rapport`
+- Added aggregated reporting payloads for:
+  - runtime distribution by heating mode (`AC`, `Gas`, `Mix`, `Klar`)
+  - average prices by source (electricity, gas, district heat)
+  - source consumption and estimated cost (when corresponding sensors are available)
+
+### Improved
+- Added internal analytics sampling in the coordinator (rolling, persisted runtime samples) to support daily/weekly operational summaries.
+- Improved observability for validating whether source-priority logic actually reduces gas usage over time.
+- Improved dashboard integration options by exposing summary data through sensor attributes for card rendering.
+
 ## v0.1.5
 
 Date: 2026-03-29
