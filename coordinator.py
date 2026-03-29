@@ -278,6 +278,38 @@ def _resolve_room_target_number_entity(
     return dedup[0] if dedup else None
 
 
+def _resolve_room_temp_sensor_entity(
+    hass: HomeAssistant, room_name: str, configured_entity: str | None
+) -> str | None:
+    """Resolve temperature sensor with safe preference rules.
+
+    For Garage we prefer the base sensor without trailing `_2` when both exist.
+    """
+
+    def _state_ok(entity_id: str | None) -> bool:
+        if not entity_id:
+            return False
+        st = hass.states.get(entity_id)
+        if st is None:
+            return False
+        return _safe_float(st.state) is not None
+
+    candidates: list[str] = []
+    configured = str(configured_entity or "").strip()
+    if configured:
+        room_l = room_name.lower()
+        if "garage" in room_l and configured.endswith("_2"):
+            base = configured[:-2]
+            # user-preferred garage sensor should win if available
+            candidates.append(base)
+        candidates.append(configured)
+
+    for c in candidates:
+        if _state_ok(c):
+            return c
+    return candidates[0] if candidates else None
+
+
 @dataclass
 class RoomSnapshot:
     """Room state used by AI motor."""
@@ -692,7 +724,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 presence_state["last_change"] = now_ts
 
         presence_eco_active = bool(presence_eco_enabled and presence_state.get("eco_forced"))
-        target_base = eco_target if presence_eco_active else global_target
+        # Keep room control target local to each room. Global presence eco is informational
+        # and must not pull all rooms down to eco target.
+        target_base = global_target
 
         rooms: list[RoomSnapshot] = []
         target_restore_actions: list[tuple[str, float, str]] = []
@@ -700,7 +734,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for idx, room_cfg in enumerate(rooms_cfg):
             name = str(room_cfg.get(CONF_ROOM_NAME) or f"Rum {idx + 1}")
             room_rt = self._room_runtime.setdefault(name, {})
-            temp_entity = room_cfg.get(CONF_ROOM_TEMP_SENSOR)
+            temp_entity = _resolve_room_temp_sensor_entity(
+                self.hass, name, room_cfg.get(CONF_ROOM_TEMP_SENSOR)
+            )
             if not temp_entity:
                 unavailable += 1
                 continue
@@ -1405,7 +1441,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ai_model_fast=ai_model_fast,
             ai_model_report=ai_model_report,
             provider_ready=provider_ready,
-            target_base=round(target_base, decimals),
             flow_limited=flow_limited,
             heat_pump_cheaper=heat_pump_cheaper,
             cheapest_alt_name=cheapest_alt_name,
@@ -1555,7 +1590,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ai_model_fast: str,
         ai_model_report: str,
         provider_ready: bool,
-        target_base: float,
         flow_limited: bool,
         heat_pump_cheaper: bool,
         cheapest_alt_name: str | None,
@@ -1579,7 +1613,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             f"Provider klar: {'Ja' if provider_ready else 'Nej'}",
             f"AI-faktor: {self._ai_factor:.1f} ({self._ai_reason})",
             f"AI-konfidens: {self._ai_confidence:.1f}%",
-            f"Globalt mål: {target_base:.{decimals}f}°C",
             f"Billigste varmekilde nu: {'Varmepumpe' if heat_pump_cheaper else 'Radiator/Gas'}",
             f"Sammenlignet mod: {cheapest_alt_name or 'Ingen'}",
             f"Estimeret besparelse: {estimated_savings_per_kwh if estimated_savings_per_kwh is not None else '-'} kr/kWh",

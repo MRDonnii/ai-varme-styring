@@ -2,6 +2,25 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.4
+
+Date: 2026-03-29
+
+### Fixed
+- Removed global target influence from the room control loop so all rooms no longer get pulled down to 20°C by a global eco state.
+- Removed global target from AI report output and report builder input. Reporting now stays room-focused.
+- Fixed per-room AI target control when legacy target helpers are unavailable by adding runtime target override support.
+- Fixed heat source decision behavior so heat pump availability under deficit is no longer blocked by low AI confidence.
+- Fixed price-comparison behavior by prioritizing existing COP/boiler-aware heat-price sensors when present.
+- Fixed garage sensor mismatch by adding safe room sensor resolution and garage-specific preference for the base temperature sensor over `_2` variants.
+
+### Improved
+- Added per-room opening pause timing controls to runtime:
+  - Pause after opening (minutes)
+  - Resume after closing (minutes)
+- Improved migration resilience for mixed legacy/new setups where old helpers, entities, or naming patterns still exist.
+- Improved dashboard consistency by aligning room-level behavior with per-room AI target ownership.
+
 ## v0.1.3
 
 Date: 2026-03-29
