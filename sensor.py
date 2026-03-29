@@ -15,6 +15,16 @@ from .const import DOMAIN
 from .entity import AiVarmeBaseEntity
 
 
+def _num_or_zero(value: Any, decimals: int = 1) -> float:
+    """Return numeric value, or 0.0 for missing/invalid input."""
+    try:
+        if value is None:
+            return 0.0
+        return round(float(value), decimals)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -72,8 +82,20 @@ class AiVarmeRoomBaseSensor(AiVarmeBaseEntity, SensorEntity):
 
     def _room_data(self) -> dict[str, Any]:
         rooms = (self.coordinator.data or {}).get("rooms", [])
+        wanted_name = str(self._room_name).strip().lower()
+        wanted_slug = self._room_slug
+
         for room in rooms:
-            if str(room.get("name", "")).strip().lower() == self._room_name.lower():
+            room_name = str(room.get("name", "")).strip()
+            room_name_l = room_name.lower()
+            room_slug = _room_slug(room_name)
+            if room_name_l == wanted_name:
+                return room
+            if room_slug == wanted_slug:
+                return room
+            if room_slug.startswith(wanted_slug) or wanted_slug.startswith(room_slug):
+                return room
+            if room_name_l.startswith(wanted_name) or wanted_name.startswith(room_name_l):
                 return room
         return {}
 
@@ -134,6 +156,8 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
             "vinduespause_tilladt": room.get("opening_pause_enabled", True),
             "eco_aktiv": room.get("eco_active"),
             "varmepumpe": room.get("heat_pump"),
+            "varmepumpe_intern_temp": room.get("heat_pump_internal_temp"),
+            "varmepumpe_intern_bias_c": room.get("heat_pump_internal_bias_c"),
             "radiatorer": room.get("radiators", []),
         }
 
@@ -238,8 +262,8 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "sidste_styringsaktivitet": data.get("last_control_activity"),
             "ai_factor": data.get("ai_factor"),
             "ai_reason": data.get("ai_reason"),
-            "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),
-            "estimeret_dagsbesparelse": data.get("estimated_daily_savings"),
+            "estimeret_besparelse_kwh": _num_or_zero(data.get("estimated_savings_per_kwh"), 3),
+            "estimeret_dagsbesparelse": _num_or_zero(data.get("estimated_daily_savings"), 2),
         }
 
 
@@ -350,11 +374,11 @@ class AiVarmeCheapestSourceSensor(AiVarmeBaseEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data or {}
         return {
-            "elpris": data.get("el_price"),
-            "gaspris": data.get("gas_price"),
-            "fjernvarmepris": data.get("district_heat_price"),
+            "elpris": _num_or_zero(data.get("el_price"), 3),
+            "gaspris": _num_or_zero(data.get("gas_price"), 3),
+            "fjernvarmepris": _num_or_zero(data.get("district_heat_price"), 3),
             "prisbevidst": data.get("price_awareness"),
-            "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),
+            "estimeret_besparelse_kwh": _num_or_zero(data.get("estimated_savings_per_kwh"), 3),
         }
 
 
@@ -370,12 +394,10 @@ class AiVarmeDailySavingsSensor(AiVarmeBaseEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_estimated_daily_savings"
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> float:
         data = self.coordinator.data or {}
         value = data.get("estimated_daily_savings")
-        if value is None:
-            return None
-        return float(value)
+        return _num_or_zero(value, 2)
 
 
 class AiVarmeMonthlySavingsSensor(AiVarmeBaseEntity, SensorEntity):
@@ -390,12 +412,10 @@ class AiVarmeMonthlySavingsSensor(AiVarmeBaseEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_estimated_monthly_savings"
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> float:
         data = self.coordinator.data or {}
         value = data.get("estimated_monthly_savings")
-        if value is None:
-            return None
-        return float(value)
+        return _num_or_zero(value, 2)
 
 
 class AiVarmeDeficitSensor(AiVarmeBaseEntity, SensorEntity):
@@ -522,12 +542,19 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_provider": data.get("ai_provider"),
             "ai_model_fast": data.get("ai_model_fast"),
             "ai_model_report": data.get("ai_model_report"),
+            "rapport_model_brugt": data.get("last_report_model_used"),
+            "ai_beslutnings_interval_min": data.get("ai_decision_interval_min"),
+            "ai_rapport_interval_min": data.get("ai_report_interval_min"),
             "ai_provider_ready": data.get("ai_provider_ready"),
             "ai_confidence": data.get("ai_confidence"),
-            "gasforbrug": data.get("gas_consumption"),
-            "fjernvarmeforbrug": data.get("district_heat_consumption"),
-            "estimeret_besparelse_kwh": data.get("estimated_savings_per_kwh"),
-            "estimeret_dagsbesparelse": data.get("estimated_daily_savings"),
+            "elpris": _num_or_zero(data.get("el_price"), 3),
+            "gaspris": _num_or_zero(data.get("gas_price"), 3),
+            "fjernvarmepris": _num_or_zero(data.get("district_heat_price"), 3),
+            "gasforbrug": _num_or_zero(data.get("gas_consumption"), 3),
+            "fjernvarmeforbrug": _num_or_zero(data.get("district_heat_consumption"), 3),
+            "estimeret_besparelse_kwh": _num_or_zero(data.get("estimated_savings_per_kwh"), 3),
+            "estimeret_dagsbesparelse": _num_or_zero(data.get("estimated_daily_savings"), 2),
+            "estimeret_månedsbesparelse": _num_or_zero(data.get("estimated_monthly_savings"), 2),
             "opdateret": data.get("updated_at"),
         }
 

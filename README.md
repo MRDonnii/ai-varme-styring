@@ -45,10 +45,12 @@ It can be reused in other setups, but you should expect environment-specific tun
   - Gemini
 - AI is used as a decision modifier, not as uncontrolled authority.
 - Reporting stays room-focused and avoids reintroducing global-side effects.
+- Runtime-adjustable AI decision interval and AI report interval are exposed as number entities.
 - Includes long-horizon summary reporting sensors:
   - `sensor.ai_varme_styring_garsdag_rapport`
   - `sensor.ai_varme_styring_7_dage_rapport`
 - Persists rolling analytics samples for daily and weekly operational summaries.
+- Report metadata includes active AI intervals and the last report model used.
 
 ## Runtime features
 
@@ -68,8 +70,10 @@ It can be reused in other setups, but you should expect environment-specific tun
   - Learning mode active
 - Number entities:
   - Global target and eco target
+  - AI decision interval and AI report interval
   - Presence timing values
   - PID tuning values
+  - Per-room temperature calibration values
   - Confidence threshold and revert timeout
   - Per-room timing and boost controls
 - Buttons:
@@ -107,10 +111,11 @@ For migration steps, see MIGRATION_STANDALONE.md.
 - Use AI status and analysis sensors to detect migration conflicts or sensor issues.
 - Use daily and weekly summary sensors to validate source-priority behavior over time.
 - Track mode distribution (`AC`, `Gas`, `Mix`, `Klar`) and average source prices to evaluate cost impact.
+- Use per-room calibration numbers and report metadata to validate room sensor quality and AI cadence behavior.
 
 ## Current status
 
-Current documented release: v0.1.6.
+Current documented release: v0.1.7.
 See CHANGELOG.md for full release details.
 
 ## Release process note

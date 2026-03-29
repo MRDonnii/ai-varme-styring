@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -51,7 +52,8 @@ class AiProviderClient:
             return factor, reason, confidence
         except Exception as err:  # noqa: BLE001
             LOGGER.debug("AI decision fallback: %s", err)
-            return 1.0, "AI fallback regelmotor", 0.0
+            # Fail soft: keep deterministic control active without hard provider-error state.
+            return 1.0, "AI fallback regelmotor", 55.0
 
     async def async_generate_report(
         self,
@@ -89,10 +91,22 @@ class AiProviderClient:
         payload = {"model": model, "prompt": prompt, "stream": False}
         if expect_json:
             payload["format"] = "json"
-        async with session.post(url, json=payload, timeout=30) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            return str(data.get("response", "")).strip()
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                async with session.post(url, json=payload, timeout=45) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    return str(data.get("response", "")).strip()
+            except Exception as err:  # noqa: BLE001
+                last_err = err
+                if attempt == 0:
+                    await asyncio.sleep(1.2)
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        return ""
 
     async def _async_call_gemini(self, api_key: str, model: str, prompt: str) -> str:
         session = async_get_clientsession(self.hass)

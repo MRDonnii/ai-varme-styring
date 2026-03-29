@@ -2,6 +2,36 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.7
+
+Date: 2026-03-29
+
+### Added
+- Added runtime-adjustable AI cadence controls:
+  - decision interval
+  - report interval
+- Added per-room temperature calibration numbers for room sensor correction.
+- Added report metadata attributes for active AI intervals and last report model used.
+
+### Changed
+- Automatic AI report generation now uses the fast model by default.
+- Full report model is now reserved for manual full-report runs.
+- Raised default automatic report cadence to reduce unnecessary Ollama load.
+- Tightened Tesla charge-plan AI automation so it only reacts to real scheduled charging states instead of frequent price churn.
+
+### Fixed
+- Fixed room sensor resolution so room status entities no longer stay stuck in `Ukendt` when room data is present.
+- Fixed AC control behavior so room deficit reacts from the room sensor instead of relying on misleading internal heat-pump temperature.
+- Fixed AC command spam with stricter debounce/cooldown and whole-step setpoint behavior.
+- Fixed savings/report fallbacks so missing price data no longer collapses into empty state as easily.
+- Fixed startup behavior so room data is available sooner and AI/report work does not block initial integration load.
+
+### Cleanup
+- Rewired watchdog and ops toolkit package helpers to the new `ai_varme_styring` entities.
+- Replaced legacy AI varme references in the `Varme Center` dashboard with the new integration sensors/switches where direct replacements exist.
+- Removed orphaned legacy `varmepumpe_prioritet`, `varmepumpe_ollama`, `varmepumpe_gemini`, `varmepumpe_handler`, and old PID entities from Home Assistant entity registry and restore-state storage.
+- Removed orphaned legacy target-lock helpers and duplicate heat-price entities.
+
 ## v0.1.6
 
 Date: 2026-03-29

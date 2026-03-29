@@ -20,6 +20,7 @@ from .ai_client import AiProviderClient
 from .const import (
     AI_PROVIDER_GEMINI,
     AI_PROVIDER_OLLAMA,
+    CONF_AI_DECISION_INTERVAL_MIN,
     CONF_AI_MODEL_FAST,
     CONF_AI_MODEL_REPORT,
     CONF_AI_PROVIDER,
@@ -79,6 +80,7 @@ from .const import (
     CONF_UPDATE_SECONDS,
     CONF_VACUUM_ENTITY,
     CONF_WEATHER_ENTITY,
+    DEFAULT_AI_DECISION_INTERVAL_MIN,
     DEFAULT_AI_MODEL_FAST,
     DEFAULT_AI_MODEL_REPORT,
     DEFAULT_AI_PROVIDER,
@@ -97,6 +99,7 @@ from .const import (
     DEFAULT_PRESENCE_RETURN_MIN,
     DEFAULT_RADIATOR_BOOST_C,
     DEFAULT_RADIATOR_SETBACK_C,
+    DEFAULT_REPORT_INTERVAL_MIN,
     DEFAULT_REVERT_TIMEOUT_MIN,
     DEFAULT_ROOM_ANTI_SHORT_CYCLE_MIN,
     DEFAULT_ROOM_ENABLE_PRESENCE_ECO,
@@ -113,6 +116,7 @@ from .const import (
     DEFAULT_ROOM_SENSOR_BIAS_C,
     DEFAULT_UPDATE_SECONDS,
     DOMAIN,
+    RUNTIME_AI_DECISION_INTERVAL_MIN,
     RUNTIME_ECO_TARGET,
     RUNTIME_ENABLED,
     RUNTIME_GLOBAL_TARGET,
@@ -127,6 +131,7 @@ from .const import (
     RUNTIME_PID_LAYER_ENABLED,
     RUNTIME_PRESENCE_AWAY_MIN,
     RUNTIME_PRESENCE_RETURN_MIN,
+    RUNTIME_REPORT_INTERVAL_MIN,
     RUNTIME_REVERT_TIMEOUT_MIN,
     RUNTIME_PRESENCE_ECO_ENABLED,
 )
@@ -294,6 +299,14 @@ def _resolve_room_temp_sensor_entity(
             return False
         return _safe_float(st.state) is not None
 
+    base_slug = _slug_text(room_name)
+    slug_variants: set[str] = {base_slug}
+    slug_variants.add(base_slug.replace("oe", "o").replace("ae", "a").replace("aa", "a"))
+    if not base_slug.endswith("en"):
+        slug_variants.add(f"{base_slug}en")
+    if not base_slug.endswith("n"):
+        slug_variants.add(f"{base_slug}n")
+
     candidates: list[str] = []
     configured = str(configured_entity or "").strip()
     if configured:
@@ -304,10 +317,37 @@ def _resolve_room_temp_sensor_entity(
             candidates.append(base)
         candidates.append(configured)
 
+    for slug in sorted(slug_variants):
+        candidates.extend(
+            [
+                f"sensor.temp_fugtighed_{slug}_temperature",
+                f"sensor.{slug}_temperature",
+                f"sensor.{slug}_temperatur",
+                f"sensor.weathersense_feels_like_temperature_{slug}",
+            ]
+        )
+
+    for st in hass.states.async_all("sensor"):
+        eid = st.entity_id
+        eid_l = eid.lower()
+        if not any(slug in eid_l for slug in slug_variants):
+            continue
+        if not any(token in eid_l for token in ("temperature", "temperatur")):
+            continue
+        candidates.append(eid)
+
+    seen: set[str] = set()
+    dedup: list[str] = []
     for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        dedup.append(c)
+
+    for c in dedup:
         if _state_ok(c):
             return c
-    return candidates[0] if candidates else None
+    return dedup[0] if dedup else None
 
 
 @dataclass
@@ -362,8 +402,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_ai_update = None
         self._last_report_update = None
         self._ai_report_text: str = ""
+        self._last_report_model_used: str = ""
+        self._manual_full_report_requested: bool = False
         self._analytics_samples: list[dict[str, Any]] = []
         self._manual_baseline: dict[str, dict[str, Any]] = {}
+        self._last_valid_prices: dict[str, float] = {}
         self._runtime_events: dict[str, float | None] = {
             "enabled_last_changed": None,
             "presence_eco_last_changed": None,
@@ -397,6 +440,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         baseline = data.get("manual_baseline")
         if isinstance(baseline, dict):
             self._manual_baseline = baseline
+        price_memory = data.get("last_valid_prices")
+        if isinstance(price_memory, dict):
+            cleaned_prices: dict[str, float] = {}
+            for key, val in price_memory.items():
+                num = _safe_float(val)
+                if num is not None:
+                    cleaned_prices[str(key)] = float(num)
+            self._last_valid_prices = cleaned_prices
         events = data.get("runtime_events")
         if isinstance(events, dict):
             for key in self._runtime_events:
@@ -409,6 +460,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         last_ai = data.get("last_ai_update_ts")
         last_report = data.get("last_report_update_ts")
         report_text = data.get("ai_report_text")
+        report_model_used = data.get("last_report_model_used")
         analytics_samples = data.get("analytics_samples")
         if isinstance(factor, (int, float)):
             self._ai_factor = float(factor)
@@ -422,6 +474,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_report_update = float(last_report)
         if isinstance(report_text, str):
             self._ai_report_text = report_text
+        if isinstance(report_model_used, str):
+            self._last_report_model_used = report_model_used
         if isinstance(analytics_samples, list):
             cleaned: list[dict[str, Any]] = []
             for row in analytics_samples:
@@ -448,6 +502,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {
                 "room_runtime": self._room_runtime,
                 "manual_baseline": self._manual_baseline,
+                "last_valid_prices": self._last_valid_prices,
                 "runtime_events": self._runtime_events,
                 "ai_factor": self._ai_factor,
                 "ai_reason": self._ai_reason,
@@ -455,6 +510,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "last_ai_update_ts": self._last_ai_update,
                 "last_report_update_ts": self._last_report_update,
                 "ai_report_text": self._ai_report_text,
+                "last_report_model_used": self._last_report_model_used,
                 "analytics_samples": self._analytics_samples,
             }
         )
@@ -508,6 +564,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rt = self._room_runtime.setdefault(room_name, {})
         rt["resume_after_closed_min_override"] = float(minutes)
         rt["room_resume_after_closed_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_room_sensor_bias(self, room_name: str, bias_c: float) -> None:
+        rt = self._room_runtime.setdefault(room_name, {})
+        rt["sensor_bias_override"] = float(bias_c)
+        rt["room_sensor_bias_last_changed"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
 
     async def async_set_room_target_lock(self, room_name: str, target: float) -> None:
@@ -584,6 +646,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_trigger_ai_report(self) -> None:
         self._last_report_update = None
+        self._manual_full_report_requested = True
         self._runtime_events["manual_report_last_trigger"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
         await self.async_request_refresh()
@@ -625,6 +688,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         runtime = self.hass.data[DOMAIN][self.entry.entry_id]
         now = dt_util.utcnow()
         now_ts = now.timestamp()
+        startup_refresh = self.data is None
 
         decimals = int(cfg.get(CONF_DECIMALS, DEFAULT_DECIMALS))
         enabled = bool(runtime.get(RUNTIME_ENABLED, True))
@@ -648,7 +712,18 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 cfg.get(CONF_ENABLE_LEARNING, DEFAULT_ENABLE_LEARNING),
             )
         )
-        report_interval_min = float(cfg.get(CONF_REPORT_INTERVAL_MIN, 2))
+        decision_interval_min = float(
+            runtime.get(
+                RUNTIME_AI_DECISION_INTERVAL_MIN,
+                cfg.get(CONF_AI_DECISION_INTERVAL_MIN, DEFAULT_AI_DECISION_INTERVAL_MIN),
+            )
+        )
+        report_interval_min = float(
+            runtime.get(
+                RUNTIME_REPORT_INTERVAL_MIN,
+                cfg.get(CONF_REPORT_INTERVAL_MIN, DEFAULT_REPORT_INTERVAL_MIN),
+            )
+        )
         pid_kp = float(runtime.get(RUNTIME_PID_KP, cfg.get(CONF_PID_KP, DEFAULT_PID_KP)))
         pid_ki = float(runtime.get(RUNTIME_PID_KI, cfg.get(CONF_PID_KI, DEFAULT_PID_KI)))
         pid_kd = float(runtime.get(RUNTIME_PID_KD, cfg.get(CONF_PID_KD, DEFAULT_PID_KD)))
@@ -769,7 +844,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 unavailable += 1
                 continue
 
-            bias = float(room_cfg.get(CONF_ROOM_SENSOR_BIAS_C, DEFAULT_ROOM_SENSOR_BIAS_C))
+            bias = float(
+                room_rt.get(
+                    "sensor_bias_override",
+                    room_cfg.get(CONF_ROOM_SENSOR_BIAS_C, DEFAULT_ROOM_SENSOR_BIAS_C),
+                )
+            )
             adj_temp = raw_temp - bias
 
             target = target_base
@@ -941,22 +1021,21 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if heating:
                 radiator_help_count += 1
 
-        el_price = _safe_float(
-            self.hass.states.get(cfg.get(CONF_ELECTRICITY_PRICE_SENSOR, "")).state
-            if cfg.get(CONF_ELECTRICITY_PRICE_SENSOR) and self.hass.states.get(cfg.get(CONF_ELECTRICITY_PRICE_SENSOR))
-            else None
-        )
-        gas_price = _safe_float(
-            self.hass.states.get(cfg.get(CONF_GAS_PRICE_SENSOR, "")).state
-            if cfg.get(CONF_GAS_PRICE_SENSOR) and self.hass.states.get(cfg.get(CONF_GAS_PRICE_SENSOR))
-            else None
-        )
-        district_heat_price = _safe_float(
-            self.hass.states.get(cfg.get(CONF_DISTRICT_HEAT_PRICE_SENSOR, "")).state
-            if cfg.get(CONF_DISTRICT_HEAT_PRICE_SENSOR)
-            and self.hass.states.get(cfg.get(CONF_DISTRICT_HEAT_PRICE_SENSOR))
-            else None
-        )
+        def _sticky_price(sensor_key: str, memory_key: str) -> float | None:
+            sensor_entity = cfg.get(sensor_key, "")
+            current = _safe_float(
+                self.hass.states.get(sensor_entity).state
+                if sensor_entity and self.hass.states.get(sensor_entity)
+                else None
+            )
+            if current is not None:
+                self._last_valid_prices[memory_key] = float(current)
+                return float(current)
+            return _safe_float(self._last_valid_prices.get(memory_key))
+
+        el_price = _sticky_price(CONF_ELECTRICITY_PRICE_SENSOR, "el_price")
+        gas_price = _sticky_price(CONF_GAS_PRICE_SENSOR, "gas_price")
+        district_heat_price = _sticky_price(CONF_DISTRICT_HEAT_PRICE_SENSOR, "district_heat_price")
         district_heat_consumption = _safe_float(
             self.hass.states.get(cfg.get(CONF_DISTRICT_HEAT_CONSUMPTION_SENSOR, "")).state
             if cfg.get(CONF_DISTRICT_HEAT_CONSUMPTION_SENSOR)
@@ -1027,8 +1106,13 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if effective_hp_price is not None and cheapest_alt_price is not None:
             estimated_savings_per_kwh = round(max(cheapest_alt_price - effective_hp_price, 0.0), decimals)
         estimated_daily_savings = None
-        if estimated_savings_per_kwh is not None and district_heat_consumption is not None:
-            estimated_daily_savings = round(estimated_savings_per_kwh * district_heat_consumption, decimals)
+        savings_consumption_base = None
+        if district_heat_consumption is not None:
+            savings_consumption_base = district_heat_consumption
+        elif gas_consumption is not None:
+            savings_consumption_base = gas_consumption
+        if estimated_savings_per_kwh is not None and savings_consumption_base is not None:
+            estimated_daily_savings = round(estimated_savings_per_kwh * savings_consumption_base, decimals)
         estimated_monthly_savings = None
         if estimated_daily_savings is not None:
             estimated_monthly_savings = round(estimated_daily_savings * 30.0, decimals)
@@ -1037,7 +1121,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         radiator_boost = float(cfg.get(CONF_RADIATOR_BOOST_C, DEFAULT_RADIATOR_BOOST_C))
         radiator_setback = float(cfg.get(CONF_RADIATOR_SETBACK_C, DEFAULT_RADIATOR_SETBACK_C))
 
-        if provider_ready and _minutes_since(self._last_ai_update, now_ts) >= 2:
+        if (
+            (not startup_refresh)
+            and provider_ready
+            and _minutes_since(self._last_ai_update, now_ts) >= decision_interval_min
+        ):
             outdoor_for_ai = None
             if cfg.get(CONF_OUTDOOR_TEMP_SENSOR):
                 s = self.hass.states.get(cfg.get(CONF_OUTDOOR_TEMP_SENSOR))
@@ -1065,7 +1153,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             self._last_ai_update = now_ts
 
-        if provider_ready and _minutes_since(self._last_report_update, now_ts) >= report_interval_min:
+        if (not startup_refresh) and provider_ready and _minutes_since(self._last_report_update, now_ts) >= report_interval_min:
+            use_full_report_model = self._manual_full_report_requested
+            report_model_to_use = ai_model_report if use_full_report_model else ai_model_fast
             report_payload = {
                 "target_base": round(target_base, decimals),
                 "heat_pump_cheaper": heat_pump_cheaper,
@@ -1088,11 +1178,13 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 provider=ai_provider,
                 endpoint=provider_endpoint,
                 api_key=provider_api_key,
-                model=ai_model_report,
+                model=report_model_to_use,
                 payload=report_payload,
             )
             if ai_report.strip():
                 self._ai_report_text = ai_report.strip()
+            self._last_report_model_used = report_model_to_use
+            self._manual_full_report_requested = False
             self._last_report_update = now_ts
 
         actions: list[str] = []
@@ -1269,12 +1361,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             shared_demand_rooms.append(r)
                 if shared_demand_rooms:
                     effective_deficit = max([room.deficit] + [r.deficit for r in shared_demand_rooms])
-                hp_boost = 0.0
+                learn_start_offset = float(rt.get("learn_start_offset", 0.0))
+                learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
+                start_threshold = max(0.0, room.start_deficit_c + learn_start_offset)
+                stop_threshold = max(0.0, room.stop_surplus_c + learn_stop_offset)
+                prolonged_deficit_min = 20.0
+                comfort_deficit_threshold = 0.1
+                effective_start_threshold = min(start_threshold, comfort_deficit_threshold)
+
+                hp_room_offset = 0.0
                 if effective_deficit >= 1.2:
-                    hp_boost = 2.0
+                    hp_room_offset = 3.0
                 elif effective_deficit >= 0.5:
-                    hp_boost = 1.0
-                hp_boost = round(hp_boost * self._ai_factor, 1)
+                    hp_room_offset = 2.0
+                elif effective_deficit >= 0.1:
+                    hp_room_offset = 1.0
+                elif room.surplus >= stop_threshold:
+                    hp_room_offset = -1.0
+                elif room.surplus > 0.0:
+                    hp_room_offset = -1.0
 
                 pid_output = 0.0
                 if pid_enabled:
@@ -1296,14 +1401,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     rt["pid_last_error"] = error
                     rt["pid_last_ts"] = now_ts
 
-                hp_target = round(max(16.0, min(30.0, room.target + hp_boost)), decimals)
-                learn_start_offset = float(rt.get("learn_start_offset", 0.0))
-                learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
-                start_threshold = max(0.0, room.start_deficit_c + learn_start_offset)
-                stop_threshold = max(0.0, room.stop_surplus_c + learn_stop_offset)
-                prolonged_deficit_min = 20.0
+                hp_target = round(max(16.0, min(30.0, room.target + hp_room_offset)), decimals)
+                hp_state = self.hass.states.get(room.heat_pump) if room.heat_pump else None
+                hp_internal_temp = _safe_float((hp_state.attributes if hp_state else {}).get("current_temperature"))
+                hp_internal_bias = None
+                if hp_internal_temp is not None:
+                    hp_internal_bias = hp_internal_temp - room.temperature
 
-                if effective_deficit >= start_threshold:
+                if effective_deficit >= effective_start_threshold:
                     if rt.get("deficit_since") is None:
                         rt["deficit_since"] = now_ts
                 else:
@@ -1317,14 +1422,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     hp_target = round(room.target, decimals)
 
                 allow_start = (
-                    effective_deficit >= start_threshold
+                    effective_deficit >= effective_start_threshold
                     and allow_heat_pumps
                     and not massive_overheat_active
                 )
                 room_hybrid_takeover_heat = bool(
                     thermostat_handover
                     and room.heat_pump
-                    and effective_deficit >= start_threshold
+                    and effective_deficit >= effective_start_threshold
                     and not massive_overheat_active
                 )
                 if room_hybrid_takeover_heat:
@@ -1332,7 +1437,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if low_confidence:
                     # Fail soft: keep deterministic heating control active.
                     # We only reduce AI aggressiveness, never block basic heat demand.
-                    hp_boost = 0.0
+                    hp_room_offset = max(hp_room_offset, 0.0)
                 last_switch = rt.get("last_switch")
                 if allow_start:
                     if _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min and effective_deficit < room.quick_start_deficit_c:
@@ -1342,7 +1447,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if allow_start:
                         if pid_enabled:
                             hp_target = round(
-                                max(16.0, min(30.0, room.target + max(hp_boost, max(0.0, pid_output)))),
+                                max(16.0, min(30.0, room.target + hp_room_offset + pid_output)),
                                 decimals,
                             )
                         await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
@@ -1532,8 +1637,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "ai_provider": ai_provider,
             "ai_model_fast": ai_model_fast,
             "ai_model_report": ai_model_report,
+            "last_report_model_used": self._last_report_model_used or ai_model_fast,
             "ai_provider_ready": provider_ready,
             "ai_provider_endpoint": provider_endpoint,
+            "ai_decision_interval_min": round(decision_interval_min, 1),
+            "ai_report_interval_min": round(report_interval_min, 1),
             "ai_factor": self._ai_factor,
             "ai_reason": self._ai_reason,
             "ai_confidence": round(self._ai_confidence, 1),
@@ -1624,10 +1732,33 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         active_summary = ", ".join(active_names) if active_names else "Ingen aktiv varmekilde"
         control_entities = ([room.heat_pump] if room.heat_pump else []) + list(room.radiators)
+        hp_internal_temp = None
+        hp_internal_bias = None
+        if room.heat_pump:
+            hp_state = self.hass.states.get(room.heat_pump)
+            hp_internal_temp = _safe_float((hp_state.attributes if hp_state else {}).get("current_temperature"))
+            if hp_internal_temp is not None:
+                hp_internal_bias = round(hp_internal_temp - room.temperature, decimals)
 
         return {
             "name": room.name,
             "sensor": room.sensor_entity,
+            "sensor_bias_c": round(
+                float(
+                    self._room_runtime.get(room.name, {}).get(
+                        "sensor_bias_override",
+                        next(
+                            (
+                                cfg_room.get(CONF_ROOM_SENSOR_BIAS_C, DEFAULT_ROOM_SENSOR_BIAS_C)
+                                for cfg_room in ({**self.entry.data, **self.entry.options}).get(CONF_ROOMS, [])
+                                if str(cfg_room.get(CONF_ROOM_NAME, "")).strip().lower() == room.name.lower()
+                            ),
+                            DEFAULT_ROOM_SENSOR_BIAS_C,
+                        ),
+                    )
+                ),
+                decimals,
+            ),
             "temperature_raw": round(room.raw_temperature, decimals),
             "temperature": round(room.temperature, decimals),
             "target": round(room.target, decimals),
@@ -1644,6 +1775,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "room_enabled": room.room_enabled,
             "target_number_entity": room.target_number_entity,
             "heat_pump": room.heat_pump,
+            "heat_pump_internal_temp": round(hp_internal_temp, decimals) if hp_internal_temp is not None else None,
+            "heat_pump_internal_bias_c": hp_internal_bias,
             "radiators": room.radiators,
             "control_entities": control_entities,
             "link_group": room.link_group,
@@ -1893,6 +2026,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.hass.states.get(climate_entity)
         if not state or state.state == mode:
             return
+        now_ts = dt_util.utcnow().timestamp()
+        cmd_runtime = self._room_runtime.setdefault("__entity_commands__", {})
+        entity_runtime = cmd_runtime.setdefault(climate_entity, {})
+        last_mode = entity_runtime.get("last_hvac_mode")
+        last_mode_ts = entity_runtime.get("last_hvac_mode_ts")
+        if (
+            last_mode == str(mode)
+            and isinstance(last_mode_ts, (int, float))
+            and _minutes_since(float(last_mode_ts), now_ts) < 2.0
+        ):
+            return
         self._remember_manual_baseline(climate_entity)
         await self.hass.services.async_call(
             "climate",
@@ -1900,6 +2044,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {"entity_id": climate_entity, "hvac_mode": mode},
             blocking=False,
         )
+        entity_runtime["last_hvac_mode"] = str(mode)
+        entity_runtime["last_hvac_mode_ts"] = now_ts
         actions.append(f"{climate_entity}: hvac_mode -> {mode}")
 
     async def _async_set_input_number_if_needed(self, entity_id: str, value: float, actions: list[str]) -> None:
@@ -1919,14 +2065,48 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.hass.states.get(climate_entity)
         if not state:
             return
+        cfg = {**self.entry.data, **self.entry.options}
+        heat_pump_entities = {
+            str(room.get(CONF_ROOM_HEAT_PUMP))
+            for room in cfg.get(CONF_ROOMS, [])
+            if room.get(CONF_ROOM_HEAT_PUMP)
+        }
+        is_heat_pump = climate_entity in heat_pump_entities
+        target = float(temperature)
+        if is_heat_pump:
+            # AC units tend to beep on every change, so only send whole-degree steps.
+            target = round(target)
         cur = _safe_float(state.attributes.get("temperature"))
-        if cur is not None and abs(cur - temperature) < 0.05:
+        min_delta = 0.9 if is_heat_pump else 0.05
+        if cur is not None and abs(cur - target) < min_delta:
+            return
+        now_ts = dt_util.utcnow().timestamp()
+        cmd_runtime = self._room_runtime.setdefault("__entity_commands__", {})
+        entity_runtime = cmd_runtime.setdefault(climate_entity, {})
+        last_temp = _safe_float(entity_runtime.get("last_temperature"))
+        last_temp_ts = entity_runtime.get("last_temperature_ts")
+        if (
+            last_temp is not None
+            and abs(last_temp - target) < min_delta
+            and isinstance(last_temp_ts, (int, float))
+            and _minutes_since(float(last_temp_ts), now_ts) < (3.0 if is_heat_pump else 0.5)
+        ):
+            return
+        if (
+            is_heat_pump
+            and isinstance(last_temp_ts, (int, float))
+            and _minutes_since(float(last_temp_ts), now_ts) < 3.0
+            and last_temp is not None
+            and abs(last_temp - target) < 0.1
+        ):
             return
         self._remember_manual_baseline(climate_entity)
         await self.hass.services.async_call(
             "climate",
             "set_temperature",
-            {"entity_id": climate_entity, "temperature": temperature},
+            {"entity_id": climate_entity, "temperature": target},
             blocking=False,
         )
-        actions.append(f"{climate_entity}: setpoint -> {temperature}")
+        entity_runtime["last_temperature"] = target
+        entity_runtime["last_temperature_ts"] = now_ts
+        actions.append(f"{climate_entity}: setpoint -> {target}")

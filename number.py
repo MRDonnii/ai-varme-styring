@@ -14,8 +14,10 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .const import (
     CONF_ROOMS,
     CONF_ROOM_NAME,
+    DEFAULT_AI_DECISION_INTERVAL_MIN,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_ECO_TARGET_C,
+    DEFAULT_ROOM_SENSOR_BIAS_C,
     DEFAULT_ROOM_PAUSE_AFTER_OPEN_MIN,
     DEFAULT_ROOM_RESUME_AFTER_CLOSED_MIN,
     DEFAULT_PID_DEADBAND_C,
@@ -27,7 +29,9 @@ from .const import (
     DEFAULT_PRESENCE_AWAY_MIN,
     DEFAULT_PRESENCE_RETURN_MIN,
     DEFAULT_REVERT_TIMEOUT_MIN,
+    DEFAULT_REPORT_INTERVAL_MIN,
     DOMAIN,
+    RUNTIME_AI_DECISION_INTERVAL_MIN,
     RUNTIME_CONFIDENCE_THRESHOLD,
     RUNTIME_PID_DEADBAND_C,
     RUNTIME_PID_INTEGRAL_LIMIT,
@@ -35,6 +39,7 @@ from .const import (
     RUNTIME_PID_KI,
     RUNTIME_PID_KP,
     RUNTIME_PID_OFFSET_MAX_C,
+    RUNTIME_REPORT_INTERVAL_MIN,
     RUNTIME_REVERT_TIMEOUT_MIN,
 )
 from .entity import AiVarmeBaseEntity
@@ -126,6 +131,32 @@ async def async_setup_entry(
         AiVarmeTargetNumber(
             data["coordinator"],
             entry,
+            key=RUNTIME_AI_DECISION_INTERVAL_MIN,
+            name="AI beslutnings-interval",
+            unique_suffix="ai_decision_interval_min",
+            icon="mdi:timer-cog-outline",
+            default=DEFAULT_AI_DECISION_INTERVAL_MIN,
+            min_value=1.0,
+            max_value=30.0,
+            step=1.0,
+            unit="min",
+        ),
+        AiVarmeTargetNumber(
+            data["coordinator"],
+            entry,
+            key=RUNTIME_REPORT_INTERVAL_MIN,
+            name="AI rapport-interval",
+            unique_suffix="ai_report_interval_min",
+            icon="mdi:timer-edit-outline",
+            default=DEFAULT_REPORT_INTERVAL_MIN,
+            min_value=1.0,
+            max_value=120.0,
+            step=1.0,
+            unit="min",
+        ),
+        AiVarmeTargetNumber(
+            data["coordinator"],
+            entry,
             key=RUNTIME_CONFIDENCE_THRESHOLD,
             name="AI confidence tærskel",
             unique_suffix="ai_confidence_threshold",
@@ -164,6 +195,13 @@ async def async_setup_entry(
         )
         entities.append(
             AiVarmeRoomEcoTargetNumber(
+                data["coordinator"],
+                entry,
+                room_name=room_name,
+            )
+        )
+        entities.append(
+            AiVarmeRoomSensorBiasNumber(
                 data["coordinator"],
                 entry,
                 room_name=room_name,
@@ -388,6 +426,31 @@ class AiVarmeRoomEcoTargetNumber(AiVarmeRoomRuntimeNumberBase):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_room_eco_target(self._room_name, float(value))
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+
+class AiVarmeRoomSensorBiasNumber(AiVarmeRoomRuntimeNumberBase):
+    """Per-room temperature sensor calibration."""
+
+    _attr_icon = "mdi:thermometer-chevron-up"
+    _attr_native_min_value = -5.0
+    _attr_native_max_value = 5.0
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "°C"
+
+    def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
+        super().__init__(coordinator, entry, room_name)
+        self._attr_name = f"{room_name} Temperatur kalibrering"
+        self._attr_unique_id = f"{entry.entry_id}_room_{self._room_slug}_sensor_bias"
+
+    @property
+    def native_value(self) -> float:
+        room = self._room_data()
+        return float(room.get("sensor_bias_c", DEFAULT_ROOM_SENSOR_BIAS_C))
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_room_sensor_bias(self._room_name, float(value))
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
