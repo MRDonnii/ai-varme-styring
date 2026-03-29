@@ -1239,16 +1239,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
                 eco_room_enabled = bool(presence_eco_enabled and room.presence_eco_enabled)
+                room_occupied_now = bool(room.occupancy_active and not vacuum_running)
+                # Track room occupancy continuously, even when eco is disabled, so enabling
+                # eco while a room has already been empty can use the real empty-since time.
+                if room_occupied_now:
+                    rt["room_empty_since"] = None
+                    if rt["room_occupied_since"] is None:
+                        rt["room_occupied_since"] = now_ts
+                else:
+                    rt["room_occupied_since"] = None
+                    if rt["room_empty_since"] is None:
+                        rt["room_empty_since"] = now_ts
+
                 if eco_room_enabled:
-                    room_occupied_now = bool(room.occupancy_active and not vacuum_running)
-                    if room_occupied_now:
-                        rt["room_empty_since"] = None
-                        if rt["room_occupied_since"] is None:
-                            rt["room_occupied_since"] = now_ts
-                    else:
-                        rt["room_occupied_since"] = None
-                        if rt["room_empty_since"] is None:
-                            rt["room_empty_since"] = now_ts
 
                     if (
                         enabled

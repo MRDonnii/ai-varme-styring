@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.8
+
+Date: 2026-03-29
+
+### Fixed
+- Fixed presence-eco timing continuity in room control:
+  - Room occupancy timestamps are now tracked continuously, even when eco mode is disabled.
+  - Enabling eco while a room is already empty now uses the real empty-since timestamp instead of restarting the timer.
+  - This makes eco activation behave immediately and predictably after manual toggles.
+
 ## v0.1.7
 
 Date: 2026-03-29
