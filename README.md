@@ -1,57 +1,60 @@
 # AI Varme Styring
 
-`AI Varme Styring` er en custom integration til Home Assistant, som styrer varmepumper og radiatorer rum-for-rum med prisbevidst logik, presence-eco og valgfrit PID-lag.
-
-Versionsnoter findes i `CHANGELOG.md`.
+`AI Varme Styring` is a custom Home Assistant integration for room-by-room heating control with price-aware logic, presence eco behavior, and an optional PID layer.
+Release notes are documented in `CHANGELOG.md`.
 
 ## Note
 
-Projektet er som udgangspunkt lavet til min egen Home Assistant-installation.
-Der er ingen garanti for løbende videreudvikling eller bred kompatibilitet.
+This project is primarily built for my own Home Assistant installation.
+There is no guarantee of ongoing development or broad compatibility across other setups.
 
-## Hvad den gør
+## What it does
 
-- Styrer varme pr. rum med egne sensorer, setpoints og enheder.
-- Understøtter både varmepumpe og radiator i samme rum.
-- Bruger AI-provider til beslutningsfaktor:
+- Controls heating per room using dedicated sensors, setpoints, and devices.
+- Supports both heat pump and radiator in the same room.
+- Uses an AI provider for decision factor generation:
   - Ollama
   - Gemini
-- Har prisbevidst drift med elpris og alternativ varmekilde (gas eller fjernvarme).
-- Har Presence-Eco med tidsvinduer (away/return), så den sænker måltemperatur når huset er tomt.
-- Har valgfrit PID-lag ovenpå den normale styring, som kan toggles til/fra.
-- Genererer status og rapport-sensorer til dashboard.
+- Uses price-aware operation with electricity price and alternative heat source price (gas or district heating).
+- Supports Presence Eco windows (away/return) to lower targets when the house is empty.
+- Includes an optional PID layer on top of standard control, toggleable at runtime.
+- Exposes status and reporting sensors for dashboards.
 
-## Entiteter integrationen opretter
+## Entities created by the integration
 
 - Switches:
-  - Aktiv styring
-  - Presence-Eco aktiv
-  - PID-lag aktiv
-- Number:
-  - Global AI-mål
-  - Eco AI-mål
-- Sensorer:
-  - AI Status
-  - Billigste varmekilde
-  - Største underskud
-  - PID-lag status
-  - AI Rapport
+  - Active control
+  - Presence eco active
+  - PID layer active
+  - Learning mode active
+- Number entities:
+  - Global AI target
+  - Eco AI target
+  - Presence and PID tuning values
+  - Confidence threshold and revert timeout
+- Sensors:
+  - AI status
+  - Cheapest heat source
+  - Largest deficit
+  - PID layer status
+  - AI report
+  - Analysis sensors (cold rooms, focus room, house level, etc.)
 
-## Opsætning
+## Setup
 
-1. Installer integrationen som custom component.
-2. Tilføj integrationen i Home Assistant.
-3. Vælg AI-provider og globale sensorer.
-4. Tilføj de rum, der skal styres (kun valgte rum styres).
-5. Finjustér tærskler og aktiver evt. Presence-Eco og PID-lag.
+1. Install the integration as a custom component.
+2. Add the integration in Home Assistant.
+3. Select AI provider and global sensors.
+4. Add the rooms you want to control (only selected rooms are managed).
+5. Fine-tune thresholds and enable Presence Eco and PID layer if needed.
 
 ## Status
 
-Aktuel versionsnote i repo: `v0.1.2` (se `CHANGELOG.md`).
+Current repo release notes: `v0.1.3` (see `CHANGELOG.md`).
 
 ## Standalone migration
 
-Integrationen er designet til at kunne køre uden legacy varmepumpe-automations.
-Se migration-guiden:
+The integration is designed to run without legacy heat-pump automations.
+See the migration guide:
 
 - `MIGRATION_STANDALONE.md`

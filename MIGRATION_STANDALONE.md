@@ -1,19 +1,19 @@
-# Migration til ren integration (uden legacy lag)
+# Migration to standalone integration mode (without legacy layer)
 
-Mål: du skal kunne fjerne gamle varmepumpe/AI-helpers og kun køre via `AI Varme Styring`.
+Goal: remove old heat pump / AI helpers and run only through `AI Varme Styring`.
 
-## 1) Aktivér integrationen som eneste motor
+## 1) Enable the integration as the only control engine
 
-- Sørg for at integrationen er sat op med alle rum og enheder.
-- Tjek at disse switches findes og har korrekt status:
-  - `switch.*_enabled` (Aktiv styring)
+- Ensure the integration is configured with all rooms and devices.
+- Verify these switches exist and have the expected states:
+  - `switch.*_enabled` (Active control)
   - `switch.*_presence_eco_enabled`
   - `switch.*_pid_enabled`
   - `switch.*_learning_enabled`
 
-## 2) Deaktiver legacy varmestyring-automations
+## 2) Disable legacy heating automations
 
-Deaktiver alle automations med disse `id`:
+Disable all automations with these `id` values:
 
 - `varmepumpe_prioritet_kontinuerlig_vurdering`
 - `varmepumpe_prioritet_stue_massiv_overvarme_sluk`
@@ -51,14 +51,14 @@ Deaktiver alle automations med disse `id`:
 - `varmepumpe_ai_handler_watchdog`
 - `varmepumpe_ollama_analysis_15min`
 
-## 3) Brug konflikt-sensoren i integrationen
+## 3) Use the integration conflict sensor
 
-- Hvis `AI Status` viser `Konflikt med legacy automations`, er mindst én gammel automation stadig aktiv.
-- Se attributten `legacy_conflicts` på status-sensoren for præcis liste.
+- If `AI Status` shows `Conflict with legacy automations`, at least one old automation is still active.
+- Check the `legacy_conflicts` attribute on the status sensor for the exact list.
 
-## 4) Fjern først gamle helpers når drift er stabil
+## 4) Remove old helpers only after stable operation
 
-Vent minimum 2-3 dage med stabil drift før du sletter gamle:
+Wait at least 2-3 days of stable operation before deleting old helpers:
 
 - `input_boolean.varmepumpe_*`
 - `input_number.varmepumpe_*`
@@ -68,7 +68,7 @@ Vent minimum 2-3 dage med stabil drift før du sletter gamle:
 
 ## 5) Rollback
 
-Hvis noget driller:
+If anything behaves incorrectly:
 
-- Aktivér relevante legacy-automations igen.
-- Slå integrationens `Aktiv styring` fra.
+- Re-enable relevant legacy automations.
+- Turn off the integration's `Active control` switch.
