@@ -2,6 +2,24 @@
 
 All significant changes to the integration are documented here.
 
+## v0.1.5
+
+Date: 2026-03-29
+
+### Fixed
+- Fixed radiator target behavior in AC rooms:
+  - During thermostat takeover (gas cheaper), radiator target now follows the room AI target instead of being lowered.
+- Fixed radiator fallback logic for rooms without heat pumps:
+  - Radiators now follow room AI target directly (no unintended global setback to 20°C).
+- Fixed long-running room comfort handling:
+  - Added sustained-deficit assist rule so AC rooms can lift radiator support after prolonged deficit.
+- Fixed report scope consistency:
+  - AI report remains room-based and does not reintroduce global target text.
+
+### Improved
+- Improved comfort stability in mixed AC + radiator setups when energy source priority changes.
+- Improved practical handover between heat-pump priority and radiator support under real-world demand.
+
 ## v0.1.4
 
 Date: 2026-03-29

@@ -1278,6 +1278,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
                 start_threshold = max(0.0, room.start_deficit_c + learn_start_offset)
                 stop_threshold = max(0.0, room.stop_surplus_c + learn_stop_offset)
+                prolonged_deficit_min = 20.0
+
+                if effective_deficit >= start_threshold:
+                    if rt.get("deficit_since") is None:
+                        rt["deficit_since"] = now_ts
+                else:
+                    rt["deficit_since"] = None
+                prolonged_deficit_active = (
+                    rt.get("deficit_since") is not None
+                    and _minutes_since(rt.get("deficit_since"), now_ts) >= prolonged_deficit_min
+                )
 
                 if linked_hot or room.surplus >= stop_threshold:
                     hp_target = round(room.target, decimals)
@@ -1367,21 +1378,40 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else:
                         actions.append(f"{room.name}: thermostat takeover (AC dyrere end alternativ)")
 
-                rad_target = round(
-                    max(7.0, min(25.0, (room.target - radiator_setback) + (radiator_boost if (room.deficit > 0 and linked_hot) else 0))),
-                    decimals,
-                )
+                if room.heat_pump:
+                    rad_target = round(
+                        max(
+                            7.0,
+                            min(
+                                25.0,
+                                (room.target - radiator_setback)
+                                + (radiator_boost if (room.deficit > 0 and linked_hot) else 0),
+                            ),
+                        ),
+                        decimals,
+                    )
+                else:
+                    # Rooms without heat pump should maintain room target directly.
+                    rad_target = round(max(7.0, min(25.0, room.target)), decimals)
                 if thermostat_handover:
                     if room.heat_pump:
-                        # In hybrid takeover, keep radiator lower so heat pump remains primary.
-                        rad_target = round(max(7.0, min(25.0, room.target - 1.0)), decimals)
+                        # Gas/thermostat takeover: raise radiator to room target for stable comfort.
+                        rad_target = round(max(7.0, min(25.0, room.target)), decimals)
                         actions.append(
-                            f"{room.name}: radiator backup sat lavere ({rad_target}°C) for varmepumpe-prioritet"
+                            f"{room.name}: radiator mål sat til AI-mål ({rad_target}°C) ved thermostat takeover"
                         )
                     else:
                         # Rooms without heat pump: radiator follows AI target directly.
                         rad_target = round(max(7.0, min(25.0, room.target)), decimals)
                         actions.append(f"{room.name}: radiator mål sat til AI-mål ({rad_target}°C)")
+                elif room.heat_pump and prolonged_deficit_active:
+                    # If AC room remains in deficit for longer time, lift radiator to target as assist.
+                    assist_target = round(max(7.0, min(25.0, room.target)), decimals)
+                    if assist_target > rad_target:
+                        rad_target = assist_target
+                        actions.append(
+                            f"{room.name}: langvarigt underskud -> radiator assist til AI-mål ({rad_target}°C)"
+                        )
                 if eco_room_enabled and rt.get("eco_active", False):
                     hard_floor = room.eco_target - 1.2
                     if room.temperature < hard_floor:
