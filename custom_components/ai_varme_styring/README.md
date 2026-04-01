@@ -4,7 +4,7 @@
 
 Lokal Home Assistant-integration til AI-baseret varmestyring med valgbar beslutningsmotor.
 
-**Aktuel version: 0.2.8**
+**Aktuel version: 0.2.9**
 
 ## Formål
 
