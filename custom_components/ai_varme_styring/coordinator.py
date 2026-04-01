@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -734,6 +735,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._analytics_samples: list[dict[str, Any]] = []
         self._manual_baseline: dict[str, dict[str, Any]] = {}
         self._last_valid_prices: dict[str, float] = {}
+        self._cycle_temperature_commands: dict[str, float] = {}
+        self._cycle_hvac_commands: dict[str, str] = {}
+        self._recent_temperature_commands: dict[str, tuple[float, float]] = {}
+        self._recent_hvac_commands: dict[str, tuple[str, float]] = {}
         self._runtime_events: dict[str, float | None] = {
             "enabled_last_changed": None,
             "presence_eco_last_changed": None,
@@ -1323,18 +1328,32 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set climate temperature only when needed."""
         if not entity_id or target is None:
             return
+        target_f = float(target)
+        is_qlima_heat_pump = entity_id.startswith("climate.qlima_")
+        if is_qlima_heat_pump:
+            target_f = float(round(target_f))
+        pending = self._cycle_temperature_commands.get(entity_id)
+        compare_margin = 0.49 if is_qlima_heat_pump else 0.05
+        if pending is not None and abs(pending - target_f) < compare_margin:
+            return
+        recent = self._recent_temperature_commands.get(entity_id)
+        now_ts = dt_util.utcnow().timestamp()
+        if recent and abs(recent[0] - target_f) < compare_margin:
+            return
         state = self.hass.states.get(entity_id)
         attrs = state.attributes if state else {}
         current = _safe_float(attrs.get("temperature"))
-        target_f = float(target)
-        if current is not None and abs(current - target_f) < 0.05:
+        if current is not None and abs(current - target_f) < compare_margin:
+            self._cycle_temperature_commands[entity_id] = target_f
             return
         await self.hass.services.async_call(
             "climate",
             "set_temperature",
             {"entity_id": entity_id, "temperature": target_f},
-            blocking=False,
+            blocking=True,
         )
+        self._cycle_temperature_commands[entity_id] = target_f
+        self._recent_temperature_commands[entity_id] = (target_f, now_ts)
         actions.append(f"{entity_id}: temperatur sat til {target_f:.1f}°C")
 
     async def _async_set_hvac_mode_if_needed(
@@ -1347,16 +1366,26 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not entity_id or mode is None:
             return
         target_mode = str(mode.value if isinstance(mode, HVACMode) else mode).lower()
+        pending = self._cycle_hvac_commands.get(entity_id)
+        if pending == target_mode:
+            return
+        recent = self._recent_hvac_commands.get(entity_id)
+        now_ts = dt_util.utcnow().timestamp()
+        if recent and recent[0] == target_mode:
+            return
         state = self.hass.states.get(entity_id)
         current_mode = str(state.state if state else "").lower()
         if current_mode == target_mode:
+            self._cycle_hvac_commands[entity_id] = target_mode
             return
         await self.hass.services.async_call(
             "climate",
             "set_hvac_mode",
             {"entity_id": entity_id, "hvac_mode": target_mode},
-            blocking=False,
+            blocking=True,
         )
+        self._cycle_hvac_commands[entity_id] = target_mode
+        self._recent_hvac_commands[entity_id] = (target_mode, now_ts)
         actions.append(f"{entity_id}: hvac mode sat til {target_mode}")
 
     def _compute_heating_mode_from_rooms(self, rooms: list[RoomSnapshot]) -> str:
@@ -1723,6 +1752,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         previous_data = dict(self.data) if isinstance(self.data, dict) else {}
         try:
+            self._cycle_temperature_commands = {}
+            self._cycle_hvac_commands = {}
             try:
                 with open("/config/_tmp_ai_varme_runtime_error.log", "a", encoding="utf-8") as fh:
                     row = {"stage": "update_start", "entry_id": self.entry.entry_id, "has_previous_data": bool(previous_data)}
@@ -2945,7 +2976,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             if room.heat_pump:
                                 # Deadband around eco target to avoid toggling noise.
                                 if room.temperature >= (room.eco_target + 0.1):
-                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                    await self._async_set_temperature_if_needed(room.heat_pump, eco_setpoint, actions)
+                                    actions.append(f"{room.name}: eco coast aktiv ved lavt setpoint")
                                 elif room.temperature <= (room.eco_target - 0.3):
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                     await self._async_set_temperature_if_needed(room.heat_pump, eco_setpoint, actions)
@@ -2993,7 +3026,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         stop_threshold = max(0.0, room.stop_surplus_c + learn_stop_offset)
                         prolonged_deficit_min = 20.0
                         comfort_deficit_threshold = 0.1
-                        effective_start_threshold = min(start_threshold, comfort_deficit_threshold)
+                        effective_start_threshold = start_threshold
                         min_hold_minutes = 60.0
                         hold_surplus_release_c = 1.0
                         stop_temp_surplus_c = 1.0
@@ -3134,6 +3167,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 hold_active = bool(hold_until is not None and hold_until > now_ts)
                                 hold_break_surplus = max(stop_temp_threshold + hold_surplus_release_c, 1.6)
                                 high_surplus_now = room.surplus >= hold_break_surplus
+                                coast_offset = 1.0 if room.surplus < (stop_temp_threshold + 1.5) else 2.0
+                                coast_target = round(max(16.0, min(30.0, room.target - coast_offset)), decimals)
                                 modulate_when_cheap = bool(
                                     stop_due_to_temp
                                     and not stop_due_to_price
@@ -3142,20 +3177,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 )
                                 if modulate_when_cheap:
                                     rt["stop_candidate_since"] = None
-                                    coast_offset = 1.0 if room.surplus < (stop_temp_threshold + 1.5) else 2.0
-                                    coast_target = round(max(16.0, min(30.0, room.target - coast_offset)), decimals)
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                     await self._async_set_temperature_if_needed(room.heat_pump, coast_target, actions)
                                     actions.append(
                                         f"{room.name}: billig AC -> modulerer (coast {coast_target}°C) i stedet for OFF"
                                     )
-                                elif massive_overheat_active or (stop_stable and (not hold_active or high_surplus_now)):
+                                elif massive_overheat_active:
                                     hp_was_running = bool(hp_state and hp_state.state != "off")
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
                                     rt["heat_hold_until"] = None
                                     rt["stop_candidate_since"] = None
                                     if hp_was_running:
                                         rt["last_switch"] = now_ts
+                                elif stop_stable and (not hold_active or high_surplus_now):
+                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                    await self._async_set_temperature_if_needed(room.heat_pump, coast_target, actions)
+                                    rt["stop_candidate_since"] = None
+                                    actions.append(
+                                        f"{room.name}: stabilt stopbehov -> coast {coast_target}°C i stedet for OFF"
+                                    )
                                 elif stop_request and hold_active:
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                     await self._async_set_temperature_if_needed(
@@ -3203,10 +3243,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     rt["learn_start_offset"] = max(-0.5, float(rt.get("learn_start_offset", 0.0)) - 0.1)
                                     rt["learn_stop_offset"] = min(0.6, float(rt.get("learn_stop_offset", 0.0)) + 0.1)
                                     rt["learn_cold_hits"] = 0
-            
+
                         if thermostat_handover:
                             if room.heat_pump and not room_hybrid_takeover_heat:
-                                await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                                takeover_coast_target = round(max(16.0, min(30.0, room.target - 2.0)), decimals)
+                                await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                await self._async_set_temperature_if_needed(
+                                    room.heat_pump, takeover_coast_target, actions
+                                )
                             if room_hybrid_takeover_heat:
                                 actions.append(
                                     f"{room.name}: hybrid takeover (AC prioriteret pga. aktuelt underskud)"
@@ -3216,7 +3260,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     if demand_names:
                                         actions.append(f"{room.name}: delt varmebehov fra {demand_names}")
                             else:
-                                actions.append(f"{room.name}: thermostat takeover (AC dyrere end alternativ)")
+                                actions.append(
+                                    f"{room.name}: thermostat takeover (AC dyrere end alternativ, coast beholdt)"
+                                )
             
                         if room.heat_pump:
                             rad_target = round(
