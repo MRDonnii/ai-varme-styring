@@ -2,6 +2,34 @@
 
 All significant changes to the integration are documented here.
 
+## v0.2.1
+
+Date: 2026-04-01
+
+### Fixed
+- **Heat pump command spam / anti-beep** (Qlima and other units):
+  - The integration no longer sends repeated `set_temperature` or `set_hvac_mode` commands every minute when nothing has actually changed.
+  - Commands are now skipped if the current climate state already matches the target.
+  - Pending and recently-sent commandsare tracked within the cycle to avoid redundant calls.
+- **Qlima whole-degree setpoint handling**:
+  - Qlima heat pumps now receive whole-degree targets only (rounded to nearest integer).
+  - Sub-degree fluctuations no longer cause unnecessary beeps or repeated IR blasts.
+- **Coast instead of OFF** in normal stabilization:
+  - Heat pumps now prefer staying in low-heat/coast mode rather than being turned fully OFF when near target.
+  - OFF is now reserved for explicit pause, door-open, major overheat, or AI-directed off commands.
+  - Avoids unnecessary compressor cycling and audible state changes.
+- **Correct start threshold respected**:
+  - Heat pumps now correctly use the configured `start_deficit_c` threshold before activating.
+  - Units no longer react aggressively to very small deficits that are within normal measurement noise.
+- **asyncio startup/runtime fix**:
+  - Fixed `Coordinator refresh failed: name 'asyncio' is not defined` error on startup/refresh.
+  - `asyncio` is now correctly imported at the top of `coordinator.py`.
+
+### Note
+- **Reduced conflicts with legacy AC automations** (HA-config side):
+  - Legacy direct AC automations in `automations.yaml` have been conditioned to only activate when AI heating control is explicitly disabled.
+  - This is a Home Assistant config change, not an integration code change. Existing installations should review their local automations if they experience control conflicts.
+
 ## v0.2.0
 
 Date: 2026-04-01
