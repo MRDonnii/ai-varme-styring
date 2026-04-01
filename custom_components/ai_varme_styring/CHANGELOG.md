@@ -1,13 +1,3 @@
-<<<<<<< HEAD
-﻿## v0.2.2
-
-Date: 2026-04-02
-
-### Fixed
-- HACS packaging and README rendering fixes; sanitized paths confirmed.
-
-=======
->>>>>>> 5ee3abdfca0ae10f94add71fb0e6af1b54e2a6ab
 # Changelog
 
 All significant changes to the integration are documented here.
@@ -202,11 +192,7 @@ Date: 2026-03-29
 - Fixed radiator target behavior in AC rooms:
   - During thermostat takeover (gas cheaper), radiator target now follows the room AI target instead of being lowered.
 - Fixed radiator fallback logic for rooms without heat pumps:
-<<<<<<< HEAD
-  - Radiators now follow room AI target directly (no unintended global setback to 20Â°C).
-=======
   - Radiators now follow room AI target directly (no unintended global setback to 20°C).
->>>>>>> 5ee3abdfca0ae10f94add71fb0e6af1b54e2a6ab
 - Fixed long-running room comfort handling:
   - Added sustained-deficit assist rule so AC rooms can lift radiator support after prolonged deficit.
 - Fixed report scope consistency:
@@ -221,11 +207,7 @@ Date: 2026-03-29
 Date: 2026-03-29
 
 ### Fixed
-<<<<<<< HEAD
-- Removed global target influence from the room control loop so all rooms no longer get pulled down to 20Â°C by a global eco state.
-=======
 - Removed global target influence from the room control loop so all rooms no longer get pulled down to 20°C by a global eco state.
->>>>>>> 5ee3abdfca0ae10f94add71fb0e6af1b54e2a6ab
 - Removed global target from AI report output and report builder input. Reporting now stays room-focused.
 - Fixed per-room AI target control when legacy target helpers are unavailable by adding runtime target override support.
 - Fixed heat source decision behavior so heat pump availability under deficit is no longer blocked by low AI confidence.
@@ -313,7 +295,3 @@ Date: 2026-03-28
 ### Documentation
 - `PARITY_TODO.md` updated with completed phases.
 - `MIGRATION_STANDALONE.md` expanded for standalone migration.
-<<<<<<< HEAD
-
-=======
->>>>>>> 5ee3abdfca0ae10f94add71fb0e6af1b54e2a6ab

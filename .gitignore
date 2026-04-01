@@ -1,4 +1,60 @@
+# Home Assistant runtime and sensitive data
+.storage/
+.cloud/
+.cache/
+.local/
+.HA_VERSION
+.ha_run.lock
+secrets.yaml
+ip_bans.yaml
+OZW_Log.txt
+home-assistant.log
+home-assistant.log.*
+*.db
+*.db-*
+*.log
+*.fault
+watchman_v2.db*
+
+# Runtime folders that should not be versioned
+data/
+backup/
+backups/
+media/
+tts/
+zigbee2mqtt/
+www/varmepumpe_ai/
+.continuously_casting_dashboards_notification_state.json
+
+# Backups, exports, and rollback data
+_rollback/
+_chat_backups/
+_archive/
+
+# Python and local tooling
+.venv/
+deps/
 __pycache__/
-*.bak
 *.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Editor and OS files
+.vscode/
 .DS_Store
+
+# Temporary and generated files
+_tmp*
+tmp*
+*.bak
+*.tmp
+automations_backup_*.yaml
+
+# AppDaemon generated frontend assets
+appdaemon/compiled/
+
+# Local screenshots and ad-hoc exports
+IMG_*.PNG
+Skærmbillede*.png
+*VoicemodV3.png

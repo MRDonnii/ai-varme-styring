@@ -193,11 +193,11 @@ Vigtige runtime-filer:
 ## Midlertidige runtime-filer
 
 Følgende filer er drifts-/debugfiler og skal ikke behandles som kildekode:
-- `/haconfig/_tmp_openclaw_bridge.log`
-- `/haconfig/_tmp_openclaw_completion_worker.log`
-- `/haconfig/_tmp_openclaw_completion_results.json`
-- `/haconfig/_tmp_openclaw_completion_worker_state.json`
-- `/haconfig/_tmp_openclaw_services_ensure.log`
+- `/haconfig/tools/openclaw_runtime/tmp/openclaw_bridge.log`
+- `/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_worker.log`
+- `/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_results.json`
+- `/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_worker_state.json`
+- `/haconfig/tools/openclaw_runtime/tmp/openclaw_services_ensure.log`
 
 ## Hvad der ikke er autoritativt
 
