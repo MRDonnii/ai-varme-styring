@@ -1,12 +1,5 @@
 # AI Varme Styring
 
-<<<<<<< HEAD
-Dette er en sanitiseret clean-release-udgave af integrationen beregnet til offentlig GitHub.
-
-Se `custom_components/ai_varme_styring/README.md` for fuld dokumentation.
-
-Bemærk: Alle interne host-stier er neutraliseret i denne udgave. Referencer til drift og runtime-filer er generiske og bør oversættes til værts-specifikke stier af brugeren.
-=======
 Lokal Home Assistant-integration til AI-baseret varmestyring med valgbar beslutningsmotor.
 
 **Aktuel version: 0.2.1**
@@ -219,4 +212,3 @@ Integrationens nuværende mål er:
 - valgfri fallback til Ollama eller Gemini
 - klare sensorer og kort der viser hvilken motor der faktisk blev brugt
 - stabil lokal drift uden npm-afhængigheder
->>>>>>> 5ee3abdfca0ae10f94add71fb0e6af1b54e2a6ab

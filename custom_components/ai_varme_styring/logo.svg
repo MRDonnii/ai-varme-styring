@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" role="img" aria-label="AI Varme Styring">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="heat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="ai" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="10" y="10" width="300" height="300" rx="64" fill="url(#bg)"/>
+  <path d="M160 62 84 122v118h54v-58h44v58h54V122Z" fill="#ffffff" opacity="0.95"/>
+  <rect x="152" y="110" width="16" height="90" rx="8" fill="url(#heat)"/>
+  <circle cx="160" cy="214" r="24" fill="url(#heat)"/>
+  <circle cx="112" cy="88" r="8" fill="url(#ai)"/>
+  <circle cx="208" cy="88" r="8" fill="url(#ai)"/>
+  <path d="M112 88 160 112M208 88 160 112" stroke="url(#ai)" stroke-width="6" stroke-linecap="round"/>
+
+  <text x="360" y="138" fill="#e2e8f0" font-size="64" font-weight="700" font-family="Segoe UI, Arial, sans-serif">AI Varme Styring</text>
+  <text x="360" y="198" fill="#94a3b8" font-size="34" font-weight="500" font-family="Segoe UI, Arial, sans-serif">Room-first heating, AI insights, stable control</text>
+</svg>
