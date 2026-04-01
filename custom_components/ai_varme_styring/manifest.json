@@ -1,0 +1,13 @@
+{
+  "domain": "ai_varme_styring",
+  "name": "AI Varme Styring",
+  "version": "0.2.0",
+  "icon": "mdi:thermostat",
+  "documentation": "https://github.com/MRDonnii/ai-varme-styring",
+  "requirements": [],
+  "codeowners": [
+    "@MRDonnii"
+  ],
+  "config_flow": true,
+  "iot_class": "local_polling"
+}
