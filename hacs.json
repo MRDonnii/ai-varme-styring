@@ -1,0 +1,10 @@
+{
+  "name": "AI Varme Styring",
+  "content_in_root": false,
+  "domains": [
+    "ai_varme_styring"
+  ],
+  "country": "DK",
+  "homeassistant": "2023.9.0",
+  "render_readme": true
+}
