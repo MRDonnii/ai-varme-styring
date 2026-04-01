@@ -1,0 +1,132 @@
+{
+  "config": {
+    "error": {
+      "choose_one_alt_heat_source": "Vælg enten gaspris eller fjernvarmepris, ikke begge.",
+      "alt_heat_source_required": "Vælg mindst én alternativ varmekilde (gas eller fjernvarme).",
+      "ollama_host_required": "Ollama host mangler.",
+      "ollama_model_fast_required": "Hurtig Ollama-model mangler.",
+      "ollama_model_report_required": "Rapport Ollama-model mangler.",
+      "gemini_api_key_required": "Gemini API-nøgle mangler.",
+      "gemini_model_fast_required": "Hurtig Gemini-model mangler.",
+      "gemini_model_report_required": "Rapport Gemini-model mangler.",
+      "openclaw_url_required": "OpenClaw URL mangler.",
+      "openclaw_bridge_or_hook_required": "Sæt OpenClaw bridge URL eller aktiver OpenClaw hook.",
+      "primary_engine_invalid": "Primær AI-motor er ugyldig.",
+      "fallback_engine_invalid": "Fallback-motor er ugyldig.",
+      "report_engine_invalid": "Rapportmotor er ugyldig.",
+      "provider_invalid": "AI-provider er ugyldig.",
+      "openclaw_payload_profile_invalid": "OpenClaw payload-profil er ugyldig.",
+      "provider_payload_profile_invalid": "Provider payload-profil er ugyldig.",
+      "room_name_required": "Rum-navn mangler.",
+      "no_rooms": "Der er ingen rum at redigere endnu.",
+      "at_least_one_room": "Tilføj mindst ét rum før du gemmer."
+    },
+    "step": {
+      "user": {
+        "title": "AI Varme Styring",
+        "description": "Vælg sensorer, AI-provider og logikindstillinger. Bemærk: kun rum du selv tilføjer i næste trin bliver styret.",
+        "data": {
+          "ai_primary_engine": "Primær AI-motor (provider eller OpenClaw)",
+          "ai_fallback_engine": "Fallback-motor til beslutninger",
+          "ai_report_engine": "Rapportmotor",
+          "openclaw_enabled": "Aktiver OpenClaw",
+          "openclaw_bridge_url": "OpenClaw decision bridge URL (synkron)",
+          "openclaw_url": "OpenClaw webhook URL",
+          "openclaw_token": "OpenClaw token",
+          "openclaw_timeout_sec": "OpenClaw timeout (sekunder)",
+          "openclaw_only_mode": "OpenClaw only mode (ingen provider fallback)",
+          "openclaw_payload_profile": "OpenClaw payload-profil (light eller heavy)",
+          "provider_payload_profile": "Provider payload-profil (light eller heavy)",
+          "humidity_comfort_enabled": "Brug fugtighed i komfortberegning",
+          "humidity_dry_threshold": "Tør grænse for fugtighed (%)",
+          "humidity_humid_threshold": "Fugtig grænse for fugtighed (%)",
+          "humidity_max_offset_c": "Maks komfort-offset fra fugtighed (°C)",
+          "room_target_step_c": "Temperatur-trin for rum-mål (0,5 eller 1,0)"
+        }
+      },
+      "room": {
+        "title": "Tilføj rum til varmestyring",
+        "description": "Vælg kun rum hvor der faktisk er varmestyring. Integration styrer ikke automatisk alle rum.",
+        "data": {
+          "room_name": "Rum-navn",
+          "room_area_id": "HA-område (valgfrit)",
+          "room_temp_sensor": "Rumtemperatur-sensor",
+          "room_humidity_sensor": "Rummets fugtsensor (valgfri)",
+          "room_target_number": "Måltemperatur helper (valgfri)",
+          "room_heat_pump": "Varmepumpe/klima-enhed (valgfri)",
+          "room_heat_pump_power_sensor": "Varmepumpe effekt-sensor (valgfri)",
+          "room_radiators": "Radiatorer (valgfri)",
+          "room_opening_sensors": "Åbning-/vindues-sensorer (valgfri)",
+          "room_occupancy_sensors": "Tilstedeværelses-sensorer (valgfri)"
+        }
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "choose_one_alt_heat_source": "Vælg enten gaspris eller fjernvarmepris, ikke begge.",
+      "alt_heat_source_required": "Vælg mindst én alternativ varmekilde (gas eller fjernvarme).",
+      "ollama_host_required": "Ollama host mangler.",
+      "ollama_model_fast_required": "Hurtig Ollama-model mangler.",
+      "ollama_model_report_required": "Rapport Ollama-model mangler.",
+      "gemini_api_key_required": "Gemini API-nøgle mangler.",
+      "gemini_model_fast_required": "Hurtig Gemini-model mangler.",
+      "gemini_model_report_required": "Rapport Gemini-model mangler.",
+      "openclaw_url_required": "OpenClaw URL mangler.",
+      "openclaw_bridge_or_hook_required": "Sæt OpenClaw bridge URL eller aktiver OpenClaw hook.",
+      "primary_engine_invalid": "Primær AI-motor er ugyldig.",
+      "provider_invalid": "AI-provider er ugyldig.",
+      "room_name_required": "Rum-navn mangler.",
+      "no_rooms": "Der er ingen rum at redigere endnu.",
+      "at_least_one_room": "Tilføj mindst ét rum før du gemmer."
+    },
+    "step": {
+      "init": {
+        "title": "AI Varme Styring indstillinger",
+        "description": "Opdater sensorer, komfort og styringsregler. AI providers har nu deres egen side, så menuen er lettere at overskue.",
+        "data": {
+          "humidity_comfort_enabled": "Brug fugtighed i komfortberegning",
+          "humidity_dry_threshold": "Tør grænse for fugtighed (%)",
+          "humidity_humid_threshold": "Fugtig grænse for fugtighed (%)",
+          "humidity_max_offset_c": "Maks komfort-offset fra fugtighed (°C)",
+          "room_target_step_c": "Temperatur-trin for rum-mål (0,5 eller 1,0)"
+        }
+      },
+      "providers": {
+        "title": "AI providers",
+        "description": "Vælg hvilke AI-motorer der bruges til beslutning, fallback og rapport. Kun relevante providerfelter vises. For OpenClaw skal modelvalget matche modeller, der faktisk er aktiveret i din OpenClaw-instans. Tekniske OpenClaw-indstillinger ligger under Avanceret styring.",
+        "data": {
+          "ai_primary_engine": "Primær AI-motor",
+          "ai_fallback_engine": "Fallback-motor til beslutninger",
+          "ai_report_engine": "Rapportmotor",
+          "openclaw_enabled": "Aktiver OpenClaw",
+          "openclaw_bridge_url": "OpenClaw decision bridge URL (synkron)",
+          "openclaw_url": "OpenClaw webhook URL",
+          "openclaw_token": "OpenClaw token",
+          "openclaw_model_preferred": "OpenClaw foretrukken model",
+          "openclaw_model_fallback": "OpenClaw fallback-model",
+          "openclaw_timeout_sec": "OpenClaw timeout (sekunder)",
+          "openclaw_only_mode": "OpenClaw only mode (ingen provider fallback)",
+          "openclaw_payload_profile": "OpenClaw payload-profil (light eller heavy)",
+          "provider_payload_profile": "Provider payload-profil (light eller heavy)",
+          "ollama_host": "Ollama host",
+          "ai_model_fast": "Ollama hurtig model",
+          "ai_model_report": "Ollama rapport model",
+          "gemini_api_key": "Gemini API-nøgle",
+          "gemini_model_fast": "Gemini hurtig model",
+          "gemini_model_report": "Gemini rapport model"
+        }
+      },
+      "advanced": {
+        "title": "Avanceret styring",
+        "description": "Finjuster PID, tærskler og tekniske grænser. De fleste kan lade denne side stå som standard.",
+        "data": {
+          "openclaw_bridge_url": "OpenClaw bridge URL (avanceret)",
+          "openclaw_timeout_sec": "OpenClaw timeout (sekunder)",
+          "openclaw_payload_profile": "OpenClaw payload-profil",
+          "provider_payload_profile": "Provider payload-profil"
+        }
+      }
+    }
+  }
+}

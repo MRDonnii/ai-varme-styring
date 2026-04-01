@@ -1,6 +1,9 @@
 {
   "name": "AI Varme Styring",
+<<<<<<< HEAD
   "content_in_root": false,
+=======
+>>>>>>> 5ee3abdfca0ae10f94add71fb0e6af1b54e2a6ab
   "domains": [
     "ai_varme_styring"
   ],
