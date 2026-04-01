@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from pathlib import Path
 
@@ -62,12 +63,16 @@ from .const import (
 from .coordinator import AiVarmeCoordinator
 
 
-_TRACE_FILE = Path("/config/_tmp_ai_varme_setup_trace.log")
+OPENCLAW_RUNTIME_TMP_DIR = Path(
+    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/tools/openclaw_runtime/tmp")
+)
+_TRACE_FILE = OPENCLAW_RUNTIME_TMP_DIR / "ai_varme_setup_trace.log"
 
 
 def _write_setup_trace(stage: str, **payload: object) -> None:
     try:
         row = {"stage": stage, **payload}
+        _TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with _TRACE_FILE.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:

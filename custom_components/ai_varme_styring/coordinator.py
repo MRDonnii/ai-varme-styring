@@ -182,10 +182,14 @@ from .const import (
 )
 
 LOGGER = logging.getLogger(__name__)
+OPENCLAW_RUNTIME_TMP_DIR = Path(
+    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/tools/openclaw_runtime/tmp")
+)
 OPENCLAW_COMPLETION_RESULTS_CANDIDATES = [
-    Path('/config/_tmp_openclaw_completion_results.json'),
+    OPENCLAW_RUNTIME_TMP_DIR / "openclaw_completion_results.json",
     Path('/config/_tmp_openclaw_completion_results.json'),
 ]
+OPENCLAW_RUNTIME_ERROR_LOG = OPENCLAW_RUNTIME_TMP_DIR / "ai_varme_runtime_error.log"
 
 _OPENCLAW_BRIDGE_ENV_FILE = "/config/tools/systemd/openclaw-decision-bridge.env"
 
@@ -1755,7 +1759,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._cycle_temperature_commands = {}
             self._cycle_hvac_commands = {}
             try:
-                with open("/config/_tmp_ai_varme_runtime_error.log", "a", encoding="utf-8") as fh:
+                OPENCLAW_RUNTIME_ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+                with OPENCLAW_RUNTIME_ERROR_LOG.open("a", encoding="utf-8") as fh:
                     row = {"stage": "update_start", "entry_id": self.entry.entry_id, "has_previous_data": bool(previous_data)}
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             except Exception:
@@ -3537,7 +3542,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:  # noqa: BLE001
             LOGGER.exception("AI coordinator refresh failed softly: %s", err)
             try:
-                with open("/config/_tmp_ai_varme_runtime_error.log", "a", encoding="utf-8") as fh:
+                OPENCLAW_RUNTIME_ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+                with OPENCLAW_RUNTIME_ERROR_LOG.open("a", encoding="utf-8") as fh:
                     row = {
                         "stage": "coordinator_exception",
                         "entry_id": self.entry.entry_id,

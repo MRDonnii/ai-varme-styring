@@ -21,14 +21,17 @@ from .const import (
 )
 
 LOGGER = logging.getLogger(__name__)
+OPENCLAW_RUNTIME_TMP_DIR = Path(
+    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/tools/openclaw_runtime/tmp")
+)
 OPENCLAW_SESSIONS_DIR = Path(
     os.environ.get("OPENCLAW_SESSIONS_DIR", "/openclaw-data/config/agents/main/sessions")
 )
 OPENCLAW_QUEUE_DIR = Path(
-    os.environ.get("OPENCLAW_QUEUE_DIR", "/config/_tmp_openclaw_decision_queue")
+    os.environ.get("OPENCLAW_QUEUE_DIR", str(OPENCLAW_RUNTIME_TMP_DIR / "openclaw_decision_queue"))
 )
 OPENCLAW_DEBUG_LOG = Path(
-    os.environ.get("OPENCLAW_DEBUG_LOG", "/config/_tmp_ai_openclaw_debug.log")
+    os.environ.get("OPENCLAW_DEBUG_LOG", str(OPENCLAW_RUNTIME_TMP_DIR / "ai_openclaw_debug.log"))
 )
 OPENCLAW_DEBUG_ENABLED = os.environ.get("OPENCLAW_DEBUG_ENABLED", "").strip().lower() in {
     "1",
@@ -37,10 +40,16 @@ OPENCLAW_DEBUG_ENABLED = os.environ.get("OPENCLAW_DEBUG_ENABLED", "").strip().lo
     "on",
 }
 OPENCLAW_RESULTS_FILE = Path(
-    os.environ.get("OPENCLAW_COMPLETION_RESULTS_FILE", "/config/_tmp_openclaw_completion_results.json")
+    os.environ.get(
+        "OPENCLAW_COMPLETION_RESULTS_FILE",
+        str(OPENCLAW_RUNTIME_TMP_DIR / "openclaw_completion_results.json"),
+    )
 )
-OPENCLAW_RESULTS_FILE_HOST = Path("/config/_tmp_openclaw_completion_results.json")
-OPENCLAW_QUEUE_DIR_HOST = Path("/haconfig/_tmp_openclaw_decision_queue")
+OPENCLAW_RESULTS_FILE_HOST = Path("/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_results.json")
+OPENCLAW_QUEUE_DIR_HOST = Path("/haconfig/tools/openclaw_runtime/tmp/openclaw_decision_queue")
+OPENCLAW_RESULTS_FILE_LEGACY = Path("/config/_tmp_openclaw_completion_results.json")
+OPENCLAW_QUEUE_DIR_LEGACY = Path("/config/_tmp_openclaw_decision_queue")
+OPENCLAW_QUEUE_DIR_HOST_LEGACY = Path("/haconfig/_tmp_openclaw_decision_queue")
 OPENCLAW_QUEUE_ENABLED = os.environ.get("OPENCLAW_QUEUE_ENABLED", "").strip().lower() in {
     "1",
     "true",
@@ -141,7 +150,11 @@ class AiProviderClient:
 
     def _candidate_results_files(self) -> list[Path]:
         paths: list[Path] = []
-        for candidate in (OPENCLAW_RESULTS_FILE, OPENCLAW_RESULTS_FILE_HOST):
+        for candidate in (
+            OPENCLAW_RESULTS_FILE,
+            OPENCLAW_RESULTS_FILE_HOST,
+            OPENCLAW_RESULTS_FILE_LEGACY,
+        ):
             if candidate not in paths:
                 paths.append(candidate)
         return paths
@@ -150,7 +163,12 @@ class AiProviderClient:
         paths: list[Path] = []
         env_candidate = OPENCLAW_QUEUE_DIR
         host_candidate = OPENCLAW_QUEUE_DIR_HOST
-        for candidate in (env_candidate, host_candidate):
+        for candidate in (
+            env_candidate,
+            host_candidate,
+            OPENCLAW_QUEUE_DIR_LEGACY,
+            OPENCLAW_QUEUE_DIR_HOST_LEGACY,
+        ):
             if candidate not in paths:
                 paths.append(candidate)
         return paths
@@ -253,6 +271,8 @@ class AiProviderClient:
                     "bridge_url": openclaw_bridge_url,
                     "openclaw_url": openclaw_url,
                     "has_token": bool(str(openclaw_token).strip()),
+                    "model_preferred": str(openclaw_model_preferred).strip(),
+                    "model_fallback": str(openclaw_model_fallback).strip(),
                     "queue_enabled": OPENCLAW_QUEUE_ENABLED,
                     "queue_dir_exists": any(path.exists() for path in self._candidate_queue_dirs()),
                     "sessions_dir_exists": OPENCLAW_SESSIONS_DIR.exists(),
@@ -270,6 +290,8 @@ class AiProviderClient:
                         ollama_endpoint=ollama_endpoint,
                         ollama_model=ollama_model,
                         timeout_sec=float(openclaw_timeout_sec),
+                        openclaw_model_preferred=openclaw_model_preferred,
+                        openclaw_model_fallback=openclaw_model_fallback,
                     )
                     data = self._extract_json(text)
                     if queue_meta:
@@ -290,6 +312,8 @@ class AiProviderClient:
                         ollama_endpoint=ollama_endpoint,
                         ollama_model=ollama_model,
                         timeout_sec=float(openclaw_timeout_sec),
+                        openclaw_model_preferred=openclaw_model_preferred,
+                        openclaw_model_fallback=openclaw_model_fallback,
                     )
                     data = self._extract_json(text)
                     if bridge_meta:
@@ -308,6 +332,8 @@ class AiProviderClient:
                 prompt=_build_prompt(payload_openclaw, request_id),
                 timeout_sec=float(openclaw_timeout_sec),
                 request_id=request_id,
+                openclaw_model_preferred=openclaw_model_preferred,
+                openclaw_model_fallback=openclaw_model_fallback,
             )
             data = self._extract_json(text)
             if meta:
@@ -505,6 +531,8 @@ class AiProviderClient:
         prompt: str,
         timeout_sec: float,
         request_id: str,
+        openclaw_model_preferred: str = "",
+        openclaw_model_fallback: str = "",
     ) -> tuple[str, dict[str, Any]]:
         """Call OpenClaw and poll local session files for the final JSON output."""
         normalized_url = self._normalize_openclaw_url(url)
@@ -519,10 +547,14 @@ class AiProviderClient:
             "deliver": False,
             "timeoutSeconds": int(max(3, min(60, round(timeout_sec)))),
             "request_id": request_id,
+            "model_preferred": str(openclaw_model_preferred).strip(),
+            "model_fallback": str(openclaw_model_fallback).strip(),
         }
         meta: dict[str, Any] = {
             "request_id": request_id,
             "openclaw_url": normalized_url,
+            "requested_model": str(openclaw_model_preferred).strip(),
+            "fallback_model": str(openclaw_model_fallback).strip(),
         }
         started = asyncio.get_running_loop().time()
         async with session.post(
@@ -541,20 +573,42 @@ class AiProviderClient:
                 return json.dumps(parsed, ensure_ascii=False), meta
 
         deadline = started + max(12.0, min(75.0, float(timeout_sec) + 20.0))
+        poll_checks = 0
         while asyncio.get_running_loop().time() < deadline:
+            poll_checks += 1
             decision = await self.hass.async_add_executor_job(
                 self._find_openclaw_session_decision,
                 request_id,
             )
             if isinstance(decision, dict):
+                meta["poll_checks"] = poll_checks
                 return json.dumps(decision, ensure_ascii=False), meta
             callback_decision = await self.hass.async_add_executor_job(
                 self._find_openclaw_callback_decision,
                 request_id,
             )
             if isinstance(callback_decision, dict):
+                meta["poll_checks"] = poll_checks
                 return json.dumps(callback_decision, ensure_ascii=False), meta
             await asyncio.sleep(0.5)
+
+        # Grace period: callback delivery can land just after polling deadline.
+        # Keep this short to avoid blocking control flow, but reduce unnecessary
+        # last_good/safe_default fallbacks.
+        grace_checks = 4
+        for _ in range(grace_checks):
+            callback_decision = await self.hass.async_add_executor_job(
+                self._find_openclaw_callback_decision,
+                request_id,
+            )
+            if isinstance(callback_decision, dict):
+                meta["poll_checks"] = poll_checks
+                meta["late_callback"] = True
+                meta["grace_callback_checks"] = grace_checks
+                return json.dumps(callback_decision, ensure_ascii=False), meta
+            await asyncio.sleep(0.35)
+        meta["poll_checks"] = poll_checks
+        meta["grace_callback_checks"] = grace_checks
         raise TimeoutError(f"OpenClaw session result timeout for {request_id}")
 
     async def _async_call_openclaw_queue(
@@ -564,6 +618,8 @@ class AiProviderClient:
         ollama_endpoint: str,
         ollama_model: str,
         timeout_sec: float,
+        openclaw_model_preferred: str = "",
+        openclaw_model_fallback: str = "",
     ) -> tuple[str, str, dict[str, Any]]:
         """Use a shared-file queue so HA can ask the host-side bridge for a decision."""
         queue_dir = self._active_queue_dir()
@@ -574,6 +630,10 @@ class AiProviderClient:
         body = {
             "request_id": request_id,
             "context": payload,
+            "model": {
+                "preferred": str(openclaw_model_preferred).strip(),
+                "fallback": str(openclaw_model_fallback).strip(),
+            },
             "fallback": {
                 "ollama_endpoint": ollama_endpoint,
                 "ollama_model": ollama_model,
@@ -634,6 +694,8 @@ class AiProviderClient:
         ollama_endpoint: str,
         ollama_model: str,
         timeout_sec: float,
+        openclaw_model_preferred: str = "",
+        openclaw_model_fallback: str = "",
     ) -> tuple[str, str, dict[str, Any]]:
         """Call a synchronous local decision bridge that returns decision JSON."""
         session = async_get_clientsession(self.hass)
@@ -642,6 +704,10 @@ class AiProviderClient:
             headers["Authorization"] = f"Bearer {token.strip()}"
         body = {
             "context": payload,
+            "model": {
+                "preferred": str(openclaw_model_preferred).strip(),
+                "fallback": str(openclaw_model_fallback).strip(),
+            },
             "fallback": {
                 "ollama_endpoint": ollama_endpoint,
                 "ollama_model": ollama_model,
