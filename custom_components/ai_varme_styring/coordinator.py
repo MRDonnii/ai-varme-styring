@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,7 @@ import logging
 import os
 import re
 import traceback
+import uuid
 from typing import Any
 
 from homeassistant.components.climate.const import HVACMode
@@ -25,6 +27,7 @@ from homeassistant.util import dt as dt_util
 from .ai_client import AiProviderClient
 from .const import (
     AI_PRIMARY_ENGINE_OPENCLAW,
+    AI_PRIMARY_ENGINE_PROVIDER,
     AI_PRIMARY_ENGINE_OPTIONS,
     AI_ENGINE_NONE,
     AI_PROVIDER_GEMINI,
@@ -167,6 +170,7 @@ from .const import (
     RUNTIME_GLOBAL_TARGET,
     RUNTIME_CONFIDENCE_THRESHOLD,
     RUNTIME_LEARNING_ENABLED,
+    RUNTIME_COMFORT_MODE_ENABLED,
     RUNTIME_PID_DEADBAND_C,
     RUNTIME_PID_INTEGRAL_LIMIT,
     RUNTIME_PID_KD,
@@ -183,15 +187,18 @@ from .const import (
 
 LOGGER = logging.getLogger(__name__)
 OPENCLAW_RUNTIME_TMP_DIR = Path(
-    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/tools/openclaw_runtime/tmp")
+    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/custom_components/ai_varme_styring/runtime/tmp")
 )
 OPENCLAW_COMPLETION_RESULTS_CANDIDATES = [
     OPENCLAW_RUNTIME_TMP_DIR / "openclaw_completion_results.json",
     Path('/config/_tmp_openclaw_completion_results.json'),
 ]
 OPENCLAW_RUNTIME_ERROR_LOG = OPENCLAW_RUNTIME_TMP_DIR / "ai_varme_runtime_error.log"
+OPENCLAW_COMPLETION_WORKER_LOG = OPENCLAW_RUNTIME_TMP_DIR / "openclaw_completion_worker.log"
+OPENCLAW_BRIDGE_LOG = OPENCLAW_RUNTIME_TMP_DIR / "openclaw_bridge.log"
+OPENCLAW_SERVICES_ENSURE_LOG = OPENCLAW_RUNTIME_TMP_DIR / "openclaw_services_ensure.log"
 
-_OPENCLAW_BRIDGE_ENV_FILE = "/config/tools/systemd/openclaw-decision-bridge.env"
+_OPENCLAW_BRIDGE_ENV_FILE = "/config/custom_components/ai_varme_styring/runtime/systemd/openclaw-decision-bridge.env"
 
 
 def _load_openclaw_bridge_env() -> dict[str, str]:
@@ -280,6 +287,59 @@ def _fmt_ts(ts: float | int | None) -> str | None:
     return dt_util.as_local(dt_util.utc_from_timestamp(float(ts))).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _runtime_file_status(path: Path, now_ts: float) -> dict[str, Any]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return {
+            "path": str(path),
+            "exists": False,
+            "size_bytes": None,
+            "updated_at": None,
+            "age_seconds": None,
+        }
+    except Exception:
+        return {
+            "path": str(path),
+            "exists": False,
+            "size_bytes": None,
+            "updated_at": None,
+            "age_seconds": None,
+        }
+    updated_ts = float(stat.st_mtime)
+    return {
+        "path": str(path),
+        "exists": True,
+        "size_bytes": int(stat.st_size),
+        "updated_at": _fmt_ts(updated_ts),
+        "age_seconds": round(max(0.0, now_ts - updated_ts), 1),
+    }
+
+
+def _openclaw_runtime_health(runtime_status: dict[str, Any]) -> str:
+    if not isinstance(runtime_status, dict):
+        return "unknown"
+    results = runtime_status.get("results_file") if isinstance(runtime_status.get("results_file"), dict) else {}
+    worker = runtime_status.get("completion_worker_log") if isinstance(runtime_status.get("completion_worker_log"), dict) else {}
+    bridge = runtime_status.get("bridge_log") if isinstance(runtime_status.get("bridge_log"), dict) else {}
+    if not results.get("exists") or not worker.get("exists") or not bridge.get("exists"):
+        return "missing"
+    ages = [
+        results.get("age_seconds"),
+        worker.get("age_seconds"),
+        bridge.get("age_seconds"),
+    ]
+    numeric_ages = [float(age) for age in ages if isinstance(age, (int, float))]
+    if not numeric_ages:
+        return "unknown"
+    max_age = max(numeric_ages)
+    if max_age > 3600:
+        return "stale"
+    if max_age > 600:
+        return "aging"
+    return "fresh"
+
+
 def _slug_text(value: str) -> str:
     normalized = value.lower()
     normalized = normalized.replace("æ", "ae").replace("ø", "oe").replace("å", "aa")
@@ -302,6 +362,16 @@ def _ai_provider_display(provider: str) -> str:
     if provider == AI_PROVIDER_OLLAMA:
         return "Ollama"
     return str(provider or "Ukendt")
+
+
+def _normalize_primary_engine(engine: str, provider: str) -> str:
+    engine_norm = str(engine or "").strip().lower()
+    provider_norm = str(provider or "").strip().lower()
+    if engine_norm == AI_PRIMARY_ENGINE_OPENCLAW:
+        return AI_PRIMARY_ENGINE_OPENCLAW
+    if engine_norm in {AI_PRIMARY_ENGINE_PROVIDER, AI_PROVIDER_OLLAMA, AI_PROVIDER_GEMINI}:
+        return provider_norm if provider_norm in {AI_PROVIDER_OLLAMA, AI_PROVIDER_GEMINI} else AI_PROVIDER_OLLAMA
+    return DEFAULT_AI_PRIMARY_ENGINE
 
 
 def _ai_decision_source_display(source: str) -> str:
@@ -329,6 +399,51 @@ def _ai_decision_source_display(source: str) -> str:
     if src == "safe_default_ollama_cooldown":
         return "Sikker standard (Ollama cooldown)"
     return source or "Ukendt"
+
+
+def _summarize_ai_errors(errors: Any) -> dict[str, str]:
+    if not isinstance(errors, dict):
+        return {}
+    summary: dict[str, str] = {}
+    for key, value in errors.items():
+        engine = str(key or "").strip().lower()
+        message = str(value or "").strip()
+        if not engine or not message:
+            continue
+        compact = " ".join(message.split())
+        summary[engine] = compact[:240]
+    return summary
+
+
+def _fallback_reason_from_decision(
+    source: str,
+    structured: dict[str, Any] | None,
+) -> str:
+    source_norm = str(source or "").strip().lower()
+    errors = _summarize_ai_errors(
+        structured.get("_errors") if isinstance(structured, dict) else {}
+    )
+    if source_norm == "last_good":
+        if errors:
+            return "Sidste gyldige AI blev brugt, fordi nyere beslutning fejlede."
+        return "Sidste gyldige AI blev genbrugt."
+    if source_norm == "safe_default":
+        if errors:
+            return "Sikker standard blev brugt, fordi alle AI-motorer fejlede."
+        return "Sikker standard blev brugt."
+    if source_norm == "openclaw_callback":
+        return "Sen OpenClaw-callback blev adopteret efter timeout/fallback."
+    if source_norm == "openclaw_mqtt_sensor":
+        return "Frisk OpenClaw-beslutning blev adopteret fra MQTT."
+    if "ollama_fallback" in source_norm:
+        return "Ollama blev brugt som fallback-beslutningsmotor."
+    if source_norm.startswith("openclaw_queue:"):
+        return "OpenClaw queue-path blev brugt."
+    if source_norm.startswith("openclaw_bridge:"):
+        return "OpenClaw bridge-path blev brugt."
+    if source_norm.startswith("openclaw"):
+        return "OpenClaw blev brugt som beslutningsmotor."
+    return ""
 
 
 def _resolve_room_humidity_sensor_entity(hass: HomeAssistant, room_name: str, temp_entity: str | None) -> str | None:
@@ -459,6 +574,129 @@ def _build_provider_decision_payload(openclaw_payload: dict[str, Any]) -> dict[s
     }
 
 
+def _build_openclaw_heating_payload(
+    hass: HomeAssistant,
+    source_payload: dict[str, Any],
+    *,
+    now_ts: float,
+    room_runtime: dict[str, dict[str, Any]],
+    weather_forecast_next_2h: dict[str, float] | None = None,
+    supply_temp: float | None = None,
+    return_temp: float | None = None,
+    heating_curve_offset: float | None = None,
+    last_decision_factor: float | None = None,
+    last_decision_mode: str | None = None,
+    last_decision_age_sec: int = 0,
+) -> dict[str, Any]:
+    """Build the strict OpenClaw heating contract from live integration data."""
+
+    runtime = source_payload.get("runtime", {})
+    rooms = source_payload.get("rooms", [])
+    request_id = str(source_payload.get("request_id") or uuid.uuid4())
+    timestamp_utc = str(source_payload.get("timestamp_utc") or dt_util.utcnow().isoformat())
+
+    mode = "normal"
+    house_mode_state = str(
+        (hass.states.get("input_select.house_mode").state if hass.states.get("input_select.house_mode") else "")
+    ).strip().lower()
+    alarm_state = str(
+        (
+            hass.states.get("alarm_control_panel.verisure_alarm").state
+            if hass.states.get("alarm_control_panel.verisure_alarm")
+            else ""
+        )
+    ).strip().lower()
+    follow_alarm_away = _is_on(
+        hass.states.get("input_boolean.house_mode_follow_alarm_away").state
+        if hass.states.get("input_boolean.house_mode_follow_alarm_away")
+        else None
+    )
+    if house_mode_state in {"ude", "away"}:
+        mode = "away"
+    elif house_mode_state in {"nat", "night"}:
+        mode = "night"
+    elif house_mode_state in {"ferie", "holiday"}:
+        mode = "away"
+    elif follow_alarm_away and alarm_state == "armed_away":
+        mode = "away"
+    if any(isinstance(room, dict) and bool(room.get("boost_active")) for room in rooms if isinstance(rooms, list)):
+        mode = "boost"
+
+    normalized_rooms: list[dict[str, Any]] = []
+    if isinstance(rooms, list):
+        for room in rooms:
+            if not isinstance(room, dict):
+                continue
+            room_name = str(room.get("name") or "Rum")
+            room_rt = room_runtime.get(room_name, {}) if isinstance(room_runtime, dict) else {}
+            heat_state = str(room.get("heat_pump_state") or "").strip().lower()
+            hvac_action = "idle"
+            if bool(room.get("opening_active")):
+                hvac_action = "off"
+            elif bool(room.get("is_heating_now")):
+                hvac_action = "heating"
+            elif heat_state == "off":
+                hvac_action = "off"
+
+            last_switch = room_rt.get("last_switch") if isinstance(room_rt, dict) else None
+            last_heating_change_minutes = int(round(_minutes_since(last_switch, now_ts), 0))
+            if last_heating_change_minutes < 0:
+                last_heating_change_minutes = 0
+
+            room_priority = "medium"
+            if bool(room.get("occupancy_active")):
+                room_priority = "high"
+            elif not bool(room.get("room_enabled", True)):
+                room_priority = "low"
+
+            normalized_rooms.append(
+                {
+                    "name": room_name,
+                    "entity_id": str(room.get("target_number_entity") or room.get("entity_id") or ""),
+                    "current_temperature": float(room.get("temp") or 0.0),
+                    "target_temperature": float(room.get("target") or 0.0),
+                    "hvac_action": hvac_action,
+                    "temp_trend_15m": 0.0,
+                    "humidity": float(room.get("humidity") or 0.0),
+                    "occupied": bool(room.get("occupancy_active")),
+                    "window_open": bool(room.get("opening_active")),
+                    "last_heating_change_minutes": last_heating_change_minutes,
+                    "valve_open_percent": 100.0 if bool(room.get("is_heating_now")) else 0.0,
+                    "radiator_surface_temp": 0.0,
+                    "room_priority": room_priority,
+                }
+            )
+
+    return {
+        "type": "heating_decision",
+        "request_id": request_id,
+        "reply_transport": "mqtt",
+        "reply_topic": "homeassistant/ai_varme/openclaw/decision",
+        "timestamp_utc": timestamp_utc,
+        "mode": mode,
+        "boost": mode == "boost",
+        "heating_active": any(bool(room.get("is_heating_now")) for room in rooms if isinstance(room, dict))
+        if isinstance(rooms, list)
+        else False,
+        "outside_temperature": float(source_payload.get("outdoor_temp") or 0.0),
+        "outside_temp_trend_1h": 0.0,
+        "weather_forecast_next_2h": {
+            "temp_min": float((weather_forecast_next_2h or {}).get("temp_min") or 0.0),
+            "temp_max": float((weather_forecast_next_2h or {}).get("temp_max") or 0.0),
+            "wind_ms": float((weather_forecast_next_2h or {}).get("wind_ms") or 0.0),
+        },
+        "rooms": normalized_rooms,
+        "last_decision": {
+            "factor": float(last_decision_factor or 0.0),
+            "global_mode": str(last_decision_mode or "normal"),
+        },
+        "last_decision_age_sec": int(max(0, last_decision_age_sec)),
+        "supply_temp": float(supply_temp or 0.0),
+        "return_temp": float(return_temp or 0.0),
+        "heating_curve_offset": float(heating_curve_offset or 0.0),
+    }
+
+
 def _legacy_automation_conflicts(hass: HomeAssistant) -> list[str]:
     conflicts: list[str] = []
     for st in hass.states.async_all("automation"):
@@ -526,6 +764,18 @@ def _resolve_room_target_number_entity(
         if _state_ok(c):
             return c
     return dedup[0] if dedup else None
+
+
+def _normalize_ai_input_number_target(value: float | None) -> float | None:
+    """Normalize AI/helper targets to 0.5C increments."""
+    if value is None:
+        return None
+    try:
+        target = float(value)
+    except (TypeError, ValueError):
+        return None
+    target = max(7.0, min(25.0, target))
+    return round(target * 2.0) / 2.0
 
 
 def _resolve_room_temp_sensor_entity(
@@ -602,9 +852,19 @@ def _resolve_room_heat_pump_power_sensor_entity(
 ) -> str | None:
     """Resolve optional heat pump power sensor for a room."""
 
+    def _looks_like_non_heat_pump_power(entity_id: str) -> bool:
+        st = hass.states.get(entity_id)
+        label_parts = [entity_id.lower()]
+        if st:
+            label_parts.append(str((st.attributes or {}).get("friendly_name", "")).lower())
+        label = " ".join(label_parts)
+        return any(token in label for token in (" pc", "pc ", "computer", "server", "desktop", "laptop"))
+
     def _state_ok(entity_id: str) -> bool:
         st = hass.states.get(entity_id)
         if not st:
+            return False
+        if _looks_like_non_heat_pump_power(entity_id):
             return False
         return _safe_float(st.state) is not None
 
@@ -631,7 +891,12 @@ def _resolve_room_heat_pump_power_sensor_entity(
         low = eid.lower()
         if hp_obj and hp_obj.lower() in low and any(t in low for t in ("power", "watt", "forbrug", "consumption")):
             candidates.append(eid)
-        elif room_slug and room_slug in low and any(t in low for t in ("power", "watt", "forbrug", "consumption")):
+        elif (
+            room_slug
+            and room_slug in low
+            and any(t in low for t in ("power", "watt", "forbrug", "consumption"))
+            and any(t in low for t in ("qlima", "ac_", "varmepumpe", "heat_pump", "hvac", "aircondition"))
+        ):
             candidates.append(eid)
 
     seen: set[str] = set()
@@ -724,11 +989,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._ai_confidence: float = 75.0
         self._ai_decision_source: str = "safe_default"
         self._ai_structured_decision: dict[str, Any] = {}
+        self._ai_prev_factor: float | None = None
+        self._ai_prev_reason: str = ""
+        self._ai_prev_confidence: float | None = None
+        self._ai_prev_decision_source: str = ""
         self._last_ai_decision_payload: dict[str, Any] = {}
         self._last_ai_decision_payload_openclaw: dict[str, Any] = {}
         self._last_ai_decision_payload_provider: dict[str, Any] = {}
         self._last_ai_report_payload: dict[str, Any] = {}
         self._ai_fallback_count: int = 0
+        self._last_ai_errors: dict[str, str] = {}
+        self._last_ai_fallback_reason: str = ""
         self._last_ai_update = None
         self._last_report_update = None
         self._ai_report_text: str = ""
@@ -824,6 +1095,15 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._ai_structured_decision = structured_decision
         if isinstance(fallback_count, (int, float)):
             self._ai_fallback_count = int(fallback_count)
+        self._last_ai_errors = _summarize_ai_errors(
+            self._ai_structured_decision.get("_errors")
+            if isinstance(self._ai_structured_decision, dict)
+            else {}
+        )
+        self._last_ai_fallback_reason = _fallback_reason_from_decision(
+            self._ai_decision_source,
+            self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
+        )
         if isinstance(analytics_samples, list):
             cleaned: list[dict[str, Any]] = []
             for row in analytics_samples:
@@ -889,6 +1169,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "ai_decision_source": self._ai_decision_source,
                 "ai_structured_decision": self._ai_structured_decision,
                 "ai_fallback_count": self._ai_fallback_count,
+                "last_ai_errors": self._last_ai_errors,
+                "last_ai_fallback_reason": self._last_ai_fallback_reason,
                 "last_ai_update_ts": self._last_ai_update,
                 "last_report_update_ts": self._last_report_update,
                 "ai_report_text": self._ai_report_text,
@@ -898,6 +1180,61 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "bridge_stats_last_update_ts": self._last_bridge_stats_update,
             }
         )
+
+    def _optimistically_patch_room_state(
+        self,
+        room_name: str,
+        *,
+        target: float | None = None,
+        eco_target: float | None = None,
+        boost_active: bool | None = None,
+        boost_delta_c: float | None = None,
+        boost_duration_min: float | None = None,
+        boost_until_ts: float | None = None,
+    ) -> None:
+        """Patch current room data immediately so UI feedback is not delayed."""
+        current = self.data
+        if not isinstance(current, dict):
+            return
+        rooms = current.get("rooms")
+        if not isinstance(rooms, list):
+            return
+
+        patched = copy.deepcopy(current)
+        patched_rooms = patched.get("rooms")
+        if not isinstance(patched_rooms, list):
+            return
+
+        room_found = False
+        for room in patched_rooms:
+            if not isinstance(room, dict):
+                continue
+            if str(room.get("name", "")).strip().lower() != room_name.strip().lower():
+                continue
+            room_found = True
+            decimals = 1 if float(room.get("target", 0) or 0).as_integer_ratio()[1] != 1 else 1
+            temp = _safe_float(room.get("temperature"))
+            if target is not None:
+                room["target"] = round(float(target), decimals)
+                if temp is not None:
+                    room["deficit"] = round(max(float(target) - temp, 0.0), decimals)
+                    room["surplus"] = round(max(temp - float(target), 0.0), decimals)
+            if eco_target is not None:
+                room["eco_target"] = round(float(eco_target), decimals)
+            if boost_active is not None:
+                room["boost_active"] = bool(boost_active)
+            if boost_delta_c is not None:
+                room["boost_delta_c"] = round(float(boost_delta_c), decimals)
+            if boost_duration_min is not None:
+                room["boost_duration_min"] = round(float(boost_duration_min), 1)
+            if boost_until_ts is not None:
+                room["boost_until"] = _fmt_ts(boost_until_ts)
+            elif boost_active is False:
+                room["boost_until"] = None
+            break
+
+        if room_found:
+            self.async_set_updated_data(patched)
 
     async def _async_fetch_bridge_stats(self, bridge_url: str) -> None:
         base = str(bridge_url).strip()
@@ -964,26 +1301,20 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             room_rt = self._room_runtime.setdefault(room.name, {})
 
             if target_temp is not None:
-                target_temp = round(max(7.0, min(25.0, float(target_temp))), decimals)
+                target_temp = _normalize_ai_input_number_target(target_temp)
+                if target_temp is None:
+                    continue
                 room_rt["target_override"] = target_temp
                 room_rt["room_target_last_changed"] = now_ts
-                lock_rt = self._room_runtime.setdefault(
-                    f"__target_lock__{room.name}",
-                    {"locked_target": target_temp, "last_seen_target": target_temp},
-                )
-                lock_rt["locked_target"] = target_temp
-                lock_rt["last_seen_target"] = target_temp
-                if room.target_number_entity:
-                    await self._async_set_input_number_if_needed(
-                        room.target_number_entity, target_temp, actions
-                    )
                 room.target = target_temp
                 room.deficit = max(target_temp - room.temperature, 0.0)
                 room.surplus = max(room.temperature - target_temp, 0.0)
                 if reason:
-                    actions.append(f"{room.name}: OpenClaw AI-mål -> {target_temp}°C ({reason})")
+                    actions.append(
+                        f"{room.name}: OpenClaw driftsoverstyring -> {target_temp}°C ({reason})"
+                    )
                 else:
-                    actions.append(f"{room.name}: OpenClaw AI-mål -> {target_temp}°C")
+                    actions.append(f"{room.name}: OpenClaw driftsoverstyring -> {target_temp}°C")
 
             if mode in {"off", "heat", "auto", "eco"}:
                 room_rt["openclaw_mode_override"] = mode
@@ -1016,6 +1347,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         runtime = self.hass.data[DOMAIN][self.entry.entry_id]
         runtime[RUNTIME_LEARNING_ENABLED] = bool(enabled)
         self._runtime_events["learning_last_changed"] = dt_util.utcnow().timestamp()
+        await self._async_save_runtime()
+
+    async def async_set_comfort_mode_enabled(self, enabled: bool) -> None:
+        runtime = self.hass.data[DOMAIN][self.entry.entry_id]
+        runtime[RUNTIME_COMFORT_MODE_ENABLED] = bool(enabled)
+        self._runtime_events["comfort_mode_last_changed"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
 
     async def async_set_room_presence_eco_enabled(self, room_name: str, enabled: bool) -> None:
@@ -1062,6 +1399,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rt["target_override"] = float(target)
         rt["room_target_last_changed"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
+        self._optimistically_patch_room_state(room_name, target=float(target))
         await self.async_request_refresh()
 
     async def async_set_room_eco_target(self, room_name: str, target: float) -> None:
@@ -1069,6 +1407,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rt["eco_target_override"] = float(target)
         rt["room_eco_target_last_changed"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
+        self._optimistically_patch_room_state(room_name, eco_target=float(target))
 
     async def async_set_room_presence_away_min(self, room_name: str, minutes: float) -> None:
         rt = self._room_runtime.setdefault(room_name, {})
@@ -1110,9 +1449,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         rt = self._room_runtime.setdefault(room_name, {})
         rt["boost_delta_c"] = float(delta_c)
-        rt["boost_until_ts"] = dt_util.utcnow().timestamp() + (float(duration_min) * 60.0)
+        boost_until_ts = dt_util.utcnow().timestamp() + (float(duration_min) * 60.0)
+        rt["boost_until_ts"] = boost_until_ts
         rt["room_boost_last_trigger"] = dt_util.utcnow().timestamp()
         await self._async_save_runtime()
+        self._optimistically_patch_room_state(
+            room_name,
+            boost_active=True,
+            boost_delta_c=float(delta_c),
+            boost_duration_min=float(duration_min),
+            boost_until_ts=boost_until_ts,
+        )
         await self.async_request_refresh()
 
     async def async_set_room_boost_delta(self, room_name: str, delta_c: float) -> None:
@@ -1263,6 +1610,33 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_ai_update = dt_util.utcnow().timestamp()
         return True
 
+    def _adopt_mqtt_sensor_decision_if_available(self) -> bool:
+        try:
+            mqtt_decision = self.ai_client._mqtt_sensor_decision()
+        except Exception:  # noqa: BLE001
+            return False
+        if not isinstance(mqtt_decision, dict):
+            return False
+        meta = mqtt_decision.get('_openclaw_meta') if isinstance(mqtt_decision.get('_openclaw_meta'), dict) else {}
+        request_id = str(meta.get('request_id') or '').strip()
+        age_sec = meta.get('age_sec')
+        if not request_id:
+            return False
+        if isinstance(age_sec, (int, float)) and float(age_sec) > 300:
+            return False
+        try:
+            self._ai_factor = max(0.6, min(1.4, float(mqtt_decision.get('factor', self._ai_factor))))
+            self._ai_confidence = max(0.0, min(100.0, float(mqtt_decision.get('confidence', self._ai_confidence))))
+        except Exception:  # noqa: BLE001
+            return False
+        self._ai_reason = str(mqtt_decision.get('reason', self._ai_reason)).strip() or self._ai_reason
+        adopted = dict(mqtt_decision)
+        adopted['_openclaw_meta'] = meta
+        self._ai_structured_decision = adopted
+        self._ai_decision_source = 'openclaw_mqtt_sensor'
+        self._last_ai_update = dt_util.utcnow().timestamp()
+        return True
+
     async def async_trigger_ai_report(self) -> None:
         self._last_report_update = None
         self._manual_full_report_requested = True
@@ -1312,7 +1686,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         state = self.hass.states.get(entity_id)
         current = _safe_float(state.state if state else None)
-        target_f = float(target)
+        target_norm = _normalize_ai_input_number_target(target)
+        if target_norm is None:
+            return
+        target_f = float(target_norm)
         if current is not None and abs(current - target_f) < 0.01:
             return
         await self.hass.services.async_call(
@@ -1342,7 +1719,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         recent = self._recent_temperature_commands.get(entity_id)
         now_ts = dt_util.utcnow().timestamp()
-        if recent and abs(recent[0] - target_f) < compare_margin:
+        recent_retry_cooldown_s = 90.0
+        if (
+            recent
+            and abs(recent[0] - target_f) < compare_margin
+            and (now_ts - float(recent[1])) < recent_retry_cooldown_s
+        ):
             return
         state = self.hass.states.get(entity_id)
         attrs = state.attributes if state else {}
@@ -1375,7 +1757,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         recent = self._recent_hvac_commands.get(entity_id)
         now_ts = dt_util.utcnow().timestamp()
-        if recent and recent[0] == target_mode:
+        recent_retry_cooldown_s = 90.0
+        if (
+            recent
+            and recent[0] == target_mode
+            and (now_ts - float(recent[1])) < recent_retry_cooldown_s
+        ):
             return
         state = self.hass.states.get(entity_id)
         current_mode = str(state.state if state else "").lower()
@@ -1513,6 +1900,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "comfort_target": round(room.comfort_target, decimals),
             "comfort_offset_c": round(room.comfort_offset_c, 2),
             "comfort_gap": round(room.comfort_gap, decimals),
+            "effective_gap": round(max(room.deficit, room.comfort_gap), decimals),
             "temperature": round(room.temperature, decimals),
             "temperature_raw": round(room.raw_temperature, decimals),
             "target": round(room.target, decimals),
@@ -1794,6 +2182,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     cfg.get(CONF_ENABLE_LEARNING, DEFAULT_ENABLE_LEARNING),
                 )
             )
+            comfort_mode_enabled = bool(runtime.get(RUNTIME_COMFORT_MODE_ENABLED, False))
             decision_interval_min = float(
                 runtime.get(
                     RUNTIME_AI_DECISION_INTERVAL_MIN,
@@ -1834,16 +2223,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             )
             
-            ai_provider = str(cfg.get(CONF_AI_PROVIDER, DEFAULT_AI_PROVIDER))
-            ai_primary_engine = str(cfg.get(CONF_AI_PRIMARY_ENGINE, DEFAULT_AI_PRIMARY_ENGINE))
-            if ai_primary_engine not in AI_PRIMARY_ENGINE_OPTIONS:
-                ai_primary_engine = DEFAULT_AI_PRIMARY_ENGINE
+            ai_provider = str(cfg.get(CONF_AI_PROVIDER, DEFAULT_AI_PROVIDER)).strip().lower()
+            ai_primary_engine_raw = str(
+                cfg.get(CONF_AI_PRIMARY_ENGINE, DEFAULT_AI_PRIMARY_ENGINE)
+            )
             ai_fallback_engine = str(
                 cfg.get(CONF_AI_FALLBACK_ENGINE, DEFAULT_AI_FALLBACK_ENGINE)
             ).strip().lower()
             ai_report_engine = str(
                 cfg.get(CONF_AI_REPORT_ENGINE, DEFAULT_AI_REPORT_ENGINE)
             ).strip().lower()
+            ai_primary_engine = _normalize_primary_engine(ai_primary_engine_raw, ai_provider)
             if ai_provider == AI_PROVIDER_GEMINI:
                 ai_model_fast = str(cfg.get(CONF_GEMINI_MODEL_FAST, "gemini-2.5-flash"))
                 ai_model_report = str(cfg.get(CONF_GEMINI_MODEL_REPORT, "gemini-2.5-pro"))
@@ -1882,11 +2272,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 bridge_env.get("OPENCLAW_TIMEOUT_SEC")
                 or os.getenv("OPENCLAW_TIMEOUT_SEC", "")
             ).strip()
-            # The HA integration often runs in a different network namespace than the
-            # host-side bridge process. Self-heal away from localhost bridge URLs and
-            # use direct OpenClaw session retrieval instead.
-            if _is_localhost_http_url(openclaw_bridge_url, 18890):
-                openclaw_bridge_url = ""
+            # Prefer local bridge path when configured or empty.
+            # In this runtime, session mounts may be unavailable, while the bridge
+            # runs in the same HA context on localhost:18890.
+            if not openclaw_bridge_url:
+                openclaw_bridge_url = DEFAULT_OPENCLAW_BRIDGE_URL
             if (not openclaw_url) or _is_localhost_http_url(openclaw_url, 18789):
                 openclaw_url = env_openclaw_url or "http://homeassistant.local:18789/hooks/agent"
             if not openclaw_token:
@@ -1943,6 +2333,13 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._async_fetch_bridge_stats(openclaw_bridge_url)
                 except Exception as err:  # noqa: BLE001
                     LOGGER.debug("Bridge stats fetch failed: %s", err)
+            openclaw_runtime_status = {
+                "results_file": _runtime_file_status(OPENCLAW_COMPLETION_RESULTS_CANDIDATES[0], now_ts),
+                "completion_worker_log": _runtime_file_status(OPENCLAW_COMPLETION_WORKER_LOG, now_ts),
+                "bridge_log": _runtime_file_status(OPENCLAW_BRIDGE_LOG, now_ts),
+                "services_ensure_log": _runtime_file_status(OPENCLAW_SERVICES_ENSURE_LOG, now_ts),
+            }
+            openclaw_runtime_health = _openclaw_runtime_health(openclaw_runtime_status)
             
             vacuum_entity: str | None = cfg.get(CONF_VACUUM_ENTITY)
             vacuum_running = (
@@ -2005,7 +2402,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target_base = global_target
             
             rooms: list[RoomSnapshot] = []
-            target_restore_actions: list[tuple[str, float, str]] = []
             unavailable = 0
             for idx, room_cfg in enumerate(rooms_cfg):
                 name = str(room_cfg.get(CONF_ROOM_NAME) or f"Rum {idx + 1}")
@@ -2055,7 +2451,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 room_rt["target_override"] = tgt
                                 room_rt["room_target_last_changed"] = now_ts
                             elif abs(tgt - float(locked_target)) > 0.01:
-                                target_restore_actions.append((tgt_number, float(locked_target), name))
+                                lock_rt["locked_target"] = tgt
                             lock_rt["last_seen_target"] = tgt
                         target = tgt
                 target_override = _safe_float(room_rt.get("target_override"))
@@ -2137,7 +2533,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 heat_pump_power_w = _power_sensor_to_watts(
                     self.hass.states.get(heat_pump_power_sensor) if heat_pump_power_sensor else None
                 )
-                humidity_enabled = bool(cfg.get(CONF_HUMIDITY_COMFORT_ENABLED, DEFAULT_HUMIDITY_COMFORT_ENABLED))
+                humidity_enabled = bool(
+                    comfort_mode_enabled
+                    and cfg.get(CONF_HUMIDITY_COMFORT_ENABLED, DEFAULT_HUMIDITY_COMFORT_ENABLED)
+                )
                 humidity_dry_threshold = float(cfg.get(CONF_HUMIDITY_DRY_THRESHOLD, DEFAULT_HUMIDITY_DRY_THRESHOLD))
                 humidity_humid_threshold = float(cfg.get(CONF_HUMIDITY_HUMID_THRESHOLD, DEFAULT_HUMIDITY_HUMID_THRESHOLD))
                 humidity_max_offset_c = float(cfg.get(CONF_HUMIDITY_MAX_OFFSET_C, DEFAULT_HUMIDITY_MAX_OFFSET_C))
@@ -2429,7 +2828,37 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if outdoor_for_ai is None and cfg.get(CONF_WEATHER_ENTITY):
                         w = self.hass.states.get(cfg.get(CONF_WEATHER_ENTITY))
                         outdoor_for_ai = _safe_float((w.attributes if w else {}).get("temperature"))
+                    weather_forecast_next_2h = {
+                        "temp_min": 0.0,
+                        "temp_max": 0.0,
+                        "wind_ms": 0.0,
+                    }
+                    if cfg.get(CONF_WEATHER_ENTITY):
+                        weather_state = self.hass.states.get(cfg.get(CONF_WEATHER_ENTITY))
+                        forecast_rows = []
+                        if weather_state is not None:
+                            raw_forecast = weather_state.attributes.get("forecast")
+                            if isinstance(raw_forecast, list):
+                                forecast_rows = [row for row in raw_forecast if isinstance(row, dict)]
+                        if forecast_rows:
+                            window = forecast_rows[:2]
+                            temps = [
+                                _safe_float(row.get("temperature"))
+                                for row in window
+                                if _safe_float(row.get("temperature")) is not None
+                            ]
+                            winds = [
+                                _safe_float(row.get("wind_speed"))
+                                for row in window
+                                if _safe_float(row.get("wind_speed")) is not None
+                            ]
+                            if temps:
+                                weather_forecast_next_2h["temp_min"] = float(min(temps))
+                                weather_forecast_next_2h["temp_max"] = float(max(temps))
+                            if winds:
+                                weather_forecast_next_2h["wind_ms"] = float(winds[0])
                     ai_payload = {
+                        "request_id": str(uuid.uuid4()),
                         "timestamp_utc": now.isoformat(),
                         "engine_context": {
                             "ai_provider": ai_provider,
@@ -2547,8 +2976,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         ],
                     }
                     provider_ai_payload = _build_provider_decision_payload(ai_payload)
-                    openclaw_decision_payload = (
-                        ai_payload if openclaw_payload_profile == PAYLOAD_PROFILE_HEAVY else provider_ai_payload
+                    last_decision_mode = (
+                        self._ai_structured_decision.get("global", {}).get("mode")
+                        if isinstance(self._ai_structured_decision, dict)
+                        and isinstance(self._ai_structured_decision.get("global"), dict)
+                        else None
+                    )
+                    last_decision_age_sec = int(round(_minutes_since(self._last_ai_update, now_ts) * 60.0, 0))
+                    openclaw_decision_payload = _build_openclaw_heating_payload(
+                        self.hass,
+                        ai_payload,
+                        now_ts=now_ts,
+                        room_runtime=self._room_runtime,
+                        weather_forecast_next_2h=weather_forecast_next_2h,
+                        supply_temp=None,
+                        return_temp=None,
+                        heating_curve_offset=None,
+                        last_decision_factor=self._ai_factor,
+                        last_decision_mode=str(last_decision_mode or "normal"),
+                        last_decision_age_sec=last_decision_age_sec,
                     )
                     provider_decision_payload = (
                         ai_payload if provider_payload_profile == PAYLOAD_PROFILE_HEAVY else provider_ai_payload
@@ -2560,6 +3006,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if ai_primary_engine == AI_PRIMARY_ENGINE_OPENCLAW
                         else provider_decision_payload
                     )
+                    self._ai_prev_factor = self._ai_factor
+                    self._ai_prev_reason = self._ai_reason
+                    self._ai_prev_confidence = self._ai_confidence
+                    self._ai_prev_decision_source = self._ai_decision_source
                     previous_decision = (self._ai_factor, self._ai_reason, self._ai_confidence)
                     (
                         self._ai_factor,
@@ -2599,13 +3049,35 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self._ai_decision_source,
                         self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
                     )
+                    self._last_ai_errors = _summarize_ai_errors(
+                        self._ai_structured_decision.get("_errors")
+                        if isinstance(self._ai_structured_decision, dict)
+                        else {}
+                    )
+                    self._last_ai_fallback_reason = _fallback_reason_from_decision(
+                        self._ai_decision_source,
+                        self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
+                    )
                     adopted_openclaw_result = False
                     if self._ai_decision_source == 'last_good':
                         adopted_openclaw_result = self._adopt_openclaw_delivered_result_if_available()
+                        if adopted_openclaw_result:
+                            self._last_ai_fallback_reason = _fallback_reason_from_decision(
+                                self._ai_decision_source,
+                                self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
+                            )
+                    adopted_mqtt_result = False
+                    if self._ai_decision_source in {'last_good', 'safe_default', 'safe_default_openclaw_only'}:
+                        adopted_mqtt_result = self._adopt_mqtt_sensor_decision_if_available()
+                        if adopted_mqtt_result:
+                            self._last_ai_fallback_reason = _fallback_reason_from_decision(
+                                self._ai_decision_source,
+                                self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
+                            )
                     if (
                         self._ai_decision_source in {"last_good", "safe_default"}
                         or "ollama_fallback" in self._ai_decision_source
-                    ) and not adopted_openclaw_result:
+                    ) and not adopted_openclaw_result and not adopted_mqtt_result:
                         self._ai_fallback_count += 1
                     self._last_ai_update = now_ts
                 except Exception as err:  # noqa: BLE001
@@ -2757,12 +3229,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 actions.append("AI rum-overrides fejlede - fortsætter uden structured overrides")
             flow_limited = any(r.temperature >= (r.target + flow_limit_margin) for r in rooms)
             provider_error_state = bool(ai_provider_ready and self._ai_confidence <= 0.1)
-            room_enabled_map = {r.name: bool(r.room_enabled) for r in rooms}
-            for target_entity, locked_target, room_name in target_restore_actions:
-                if not room_enabled_map.get(room_name, True):
-                    continue
-                await self._async_set_input_number_if_needed(target_entity, locked_target, actions)
-                actions.append(f"{room_name}: autoritativ target restore -> {round(locked_target, decimals)}")
             if sensor_error:
                 actions.append("Sensorvalidering: outlier fundet")
             if enabled and ai_provider_ready:
@@ -2839,14 +3305,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 if needs_reconcile:
                                     rt["target_override"] = eco_target_for_ai
                                     rt["room_target_last_changed"] = now_ts
-                                    lock_rt["locked_target"] = eco_target_for_ai
-                                    lock_rt["last_seen_target"] = eco_target_for_ai
-                                    if room.target_number_entity:
-                                        await self._async_set_input_number_if_needed(
-                                            room.target_number_entity, eco_target_for_ai, actions
-                                        )
                                     actions.append(
-                                        f"{room.name}: eco synkroniserede AI-mål til {eco_target_for_ai}°C"
+                                        f"{room.name}: eco driftmål -> {eco_target_for_ai}°C"
                                     )
             
                             if (
@@ -2865,17 +3325,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     f"__target_lock__{room.name}",
                                     {"locked_target": eco_target_for_ai, "last_seen_target": eco_target_for_ai},
                                 )
-                                lock_rt["locked_target"] = eco_target_for_ai
-                                lock_rt["last_seen_target"] = eco_target_for_ai
-                                if room.target_number_entity:
-                                    await self._async_set_input_number_if_needed(
-                                        room.target_number_entity, eco_target_for_ai, actions
-                                    )
-                                    actions.append(
-                                        f"{room.name}: eco aktiv via manglende presence (AI-mål -> {eco_target_for_ai}°C)"
-                                    )
-                                else:
-                                    actions.append(f"{room.name}: eco aktiv via manglende presence")
+                                actions.append(
+                                    f"{room.name}: eco aktiv via manglende presence (driftmål -> {eco_target_for_ai}°C)"
+                                )
                                 if room.radiators:
                                     rad_state = self.hass.states.get(room.radiators[0])
                                     rt["eco_prev_radiator_target"] = _safe_float(
@@ -2898,19 +3350,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     restore_target = round(max(7.0, min(25.0, restore_target)), decimals)
                                     rt["target_override"] = restore_target
                                     rt["room_target_last_changed"] = now_ts
-                                    lock_rt = self._room_runtime.setdefault(
-                                        f"__target_lock__{room.name}",
-                                        {"locked_target": restore_target, "last_seen_target": restore_target},
-                                    )
-                                    lock_rt["locked_target"] = restore_target
-                                    lock_rt["last_seen_target"] = restore_target
-                                    if room.target_number_entity:
-                                        await self._async_set_input_number_if_needed(
-                                            room.target_number_entity, restore_target, actions
-                                        )
                                 rt["eco_active"] = False
                                 rt["eco_last_change"] = now_ts
-                                actions.append(f"{room.name}: eco afsluttet (AI-mål gendannet)")
+                                actions.append(f"{room.name}: eco afsluttet (hovedmål bevaret)")
                         elif rt.get("eco_active", False):
                             # If eco is active and the room/global eco toggle is turned off,
                             # clear eco state immediately for predictable behavior.
@@ -2922,16 +3364,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 restore_target = round(max(7.0, min(25.0, restore_target)), decimals)
                                 rt["target_override"] = restore_target
                                 rt["room_target_last_changed"] = now_ts
-                                lock_rt = self._room_runtime.setdefault(
-                                    f"__target_lock__{room.name}",
-                                    {"locked_target": restore_target, "last_seen_target": restore_target},
-                                )
-                                lock_rt["locked_target"] = restore_target
-                                lock_rt["last_seen_target"] = restore_target
-                                if room.target_number_entity:
-                                    await self._async_set_input_number_if_needed(
-                                        room.target_number_entity, restore_target, actions
-                                    )
                             rt["eco_active"] = False
                             rt["eco_last_change"] = now_ts
                             actions.append(f"{room.name}: eco slået fra")
@@ -3025,6 +3457,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     shared_demand_rooms.append(r)
                         if shared_demand_rooms:
                             effective_deficit = max([room.deficit] + [r.deficit for r in shared_demand_rooms])
+                        comfort_effective_gap = max(float(room.deficit), float(room.comfort_gap))
+                        comfort_gap_extra = max(0.0, float(room.comfort_gap) - float(room.deficit))
+                        comfort_bias_active = bool(
+                            comfort_mode_enabled
+                            and room.room_enabled
+                            and not room.opening_active
+                            and room.occupancy_active
+                            and comfort_gap_extra >= 0.05
+                        )
+                        if comfort_bias_active:
+                            effective_deficit = max(effective_deficit, comfort_effective_gap)
                         learn_start_offset = float(rt.get("learn_start_offset", 0.0))
                         learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
                         start_threshold = max(0.0, room.start_deficit_c + learn_start_offset)
@@ -3032,6 +3475,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         prolonged_deficit_min = 20.0
                         comfort_deficit_threshold = 0.1
                         effective_start_threshold = start_threshold
+                        if comfort_bias_active and room.comfort_band == "tør":
+                            effective_start_threshold = max(
+                                0.0,
+                                start_threshold - min(0.1, comfort_gap_extra),
+                            )
                         min_hold_minutes = 60.0
                         hold_surplus_release_c = 1.0
                         stop_temp_surplus_c = 1.0
@@ -3148,7 +3596,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 if hp_was_not_heat:
                                     rt["last_switch"] = now_ts
                                     rt["heat_hold_until"] = now_ts + (min_hold_minutes * 60.0)
-                                    actions.append(f"{room.name}: varmepumpe hold aktiv i {int(min_hold_minutes)} min")
+                                actions.append(f"{room.name}: varmepumpe hold aktiv i {int(min_hold_minutes)} min")
+                                if comfort_bias_active and room.comfort_band == "tør":
+                                    actions.append(
+                                        f"{room.name}: komfortmode prioriterede tør luft ({room.humidity:.0f}%) og oplevet komfort"
+                                    )
                             else:
                                 stop_temp_threshold = max(stop_threshold, stop_temp_surplus_c)
                                 stop_due_to_temp = room.surplus >= stop_temp_threshold
@@ -3295,14 +3747,22 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 # Rooms without heat pump: radiator follows AI target directly.
                                 rad_target = round(max(7.0, min(25.0, room.target)), decimals)
                                 actions.append(f"{room.name}: radiator mål sat til AI-mål ({rad_target}°C)")
-                        elif room.heat_pump and prolonged_deficit_active and not (eco_room_enabled and rt.get("eco_active", False)):
+                        elif room.heat_pump and (
+                            prolonged_deficit_active
+                            or (comfort_bias_active and effective_deficit >= comfort_deficit_threshold)
+                        ) and not (eco_room_enabled and rt.get("eco_active", False)):
                             # If AC room remains in deficit for longer time, lift radiator to target as assist.
                             assist_target = round(max(7.0, min(25.0, room.target)), decimals)
                             if assist_target > rad_target:
                                 rad_target = assist_target
-                                actions.append(
-                                    f"{room.name}: langvarigt underskud -> radiator assist til AI-mål ({rad_target}°C)"
-                                )
+                                if prolonged_deficit_active:
+                                    actions.append(
+                                        f"{room.name}: langvarigt underskud -> radiator assist til AI-mål ({rad_target}°C)"
+                                    )
+                                else:
+                                    actions.append(
+                                        f"{room.name}: komfortmode -> radiator assist til AI-mål ({rad_target}°C)"
+                                    )
                         if eco_room_enabled and rt.get("eco_active", False):
                             hard_floor = room.eco_target - 1.2
                             if room.temperature < hard_floor:
@@ -3453,8 +3913,27 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "ai_factor": self._ai_factor,
                 "ai_reason": self._ai_reason,
                 "ai_confidence": round(self._ai_confidence, 1),
+                "ai_prev_factor": (
+                    round(self._ai_prev_factor, 3)
+                    if isinstance(self._ai_prev_factor, (int, float))
+                    else None
+                ),
+                "ai_prev_reason": self._ai_prev_reason,
+                "ai_prev_confidence": (
+                    round(self._ai_prev_confidence, 1)
+                    if isinstance(self._ai_prev_confidence, (int, float))
+                    else None
+                ),
                 "ai_decision_source": self._ai_decision_source,
                 "ai_decision_source_display": _ai_decision_source_display(self._ai_decision_source),
+                "ai_prev_decision_source": self._ai_prev_decision_source,
+                "ai_prev_decision_source_display": _ai_decision_source_display(self._ai_prev_decision_source),
+                "ai_decision_transition": (
+                    f"{_ai_decision_source_display(self._ai_prev_decision_source)} -> "
+                    f"{_ai_decision_source_display(self._ai_decision_source)}"
+                ),
+                "ai_last_errors": self._last_ai_errors,
+                "ai_last_fallback_reason": self._last_ai_fallback_reason,
                 "ai_structured_decision": self._ai_structured_decision,
                 "ai_openclaw_meta": (
                     self._ai_structured_decision.get("_openclaw_meta", {})
@@ -3469,6 +3948,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "openclaw_enabled": openclaw_enabled,
                 "openclaw_bridge_stats": self._bridge_stats,
                 "openclaw_bridge_stats_updated": _fmt_ts(self._last_bridge_stats_update),
+                "openclaw_runtime_status": openclaw_runtime_status,
+                "openclaw_runtime_health": openclaw_runtime_health,
                 "confidence_threshold": confidence_threshold,
                 "revert_timeout_min": revert_timeout_min,
                 "presence_away_min": presence_away_min,
@@ -3485,6 +3966,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._runtime_events.get("presence_eco_last_changed")
                     or self._room_runtime.get("__presence__", {}).get("last_change")
                 ),
+                "comfort_mode_enabled": comfort_mode_enabled,
+                "comfort_mode_last_changed": _fmt_ts(
+                    self._runtime_events.get("comfort_mode_last_changed")
+                ),
+                "comfort_mode_status": "Aktiv" if comfort_mode_enabled else "Inaktiv",
                 "pid_enabled": pid_enabled,
                 "pid_last_changed": _fmt_ts(self._runtime_events.get("pid_last_changed")),
                 "pid_status": "Aktiv" if pid_enabled else "Inaktiv",
@@ -3578,6 +4064,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             fallback.setdefault("ai_fallback_count", self._ai_fallback_count)
             fallback.setdefault("ai_structured_decision", self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {})
             fallback.setdefault("ai_openclaw_meta", fallback.get("ai_openclaw_meta", {}))
+            fallback.setdefault("ai_prev_factor", self._ai_prev_factor)
+            fallback.setdefault("ai_prev_reason", self._ai_prev_reason)
+            fallback.setdefault("ai_prev_confidence", self._ai_prev_confidence)
+            fallback.setdefault("ai_prev_decision_source", self._ai_prev_decision_source)
+            fallback.setdefault(
+                "ai_prev_decision_source_display",
+                _ai_decision_source_display(self._ai_prev_decision_source),
+            )
+            fallback.setdefault(
+                "ai_decision_transition",
+                f"{_ai_decision_source_display(self._ai_prev_decision_source)} -> "
+                f"{_ai_decision_source_display(str(fallback.get('ai_decision_source', self._ai_decision_source)))}",
+            )
             fallback.setdefault("rooms", fallback.get("rooms", []))
             fallback.setdefault("actions", [])
             fallback.setdefault("report", fallback.get("report", {"short": "Afventer data", "long": "Afventer data", "bullets": []}))

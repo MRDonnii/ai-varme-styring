@@ -17,6 +17,7 @@ from .const import (
     DOMAIN,
     RUNTIME_ENABLED,
     RUNTIME_LEARNING_ENABLED,
+    RUNTIME_COMFORT_MODE_ENABLED,
     RUNTIME_PID_LAYER_ENABLED,
     RUNTIME_PRESENCE_ECO_ENABLED,
 )
@@ -31,6 +32,7 @@ async def async_setup_entry(
         AiVarmeEnabledSwitch(data["coordinator"], entry),
         AiVarmeAllRoomsEnabledSwitch(data["coordinator"], entry),
         AiVarmePresenceEcoSwitch(data["coordinator"], entry),
+        AiVarmeComfortModeSwitch(data["coordinator"], entry),
         AiVarmePidLayerSwitch(data["coordinator"], entry),
         AiVarmeLearningSwitch(data["coordinator"], entry),
     ]
@@ -179,6 +181,50 @@ class AiVarmePidLayerSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
         return {
             "sidst_skiftet": data.get("pid_last_changed"),
             "pid_status": data.get("pid_status"),
+        }
+
+
+class AiVarmeComfortModeSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
+    """Runtime switch for humidity/comfort compensation."""
+
+    _attr_name = "Komfort-mode aktiv"
+    _attr_icon = "mdi:home-thermometer-outline"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_comfort_mode_enabled"
+        self._attr_is_on = False
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._attr_is_on = bool(
+            self.hass.data[DOMAIN][self.entry.entry_id].get(RUNTIME_COMFORT_MODE_ENABLED, False)
+        )
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            self._attr_is_on = last_state.state == "on"
+        self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_COMFORT_MODE_ENABLED] = self._attr_is_on
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._attr_is_on = True
+        await self.coordinator.async_set_comfort_mode_enabled(True)
+        self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_COMFORT_MODE_ENABLED] = True
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self._attr_is_on = False
+        await self.coordinator.async_set_comfort_mode_enabled(False)
+        self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_COMFORT_MODE_ENABLED] = False
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        data = self.coordinator.data or {}
+        return {
+            "sidst_skiftet": data.get("comfort_mode_last_changed"),
+            "komfort_status": "Aktiv" if self.is_on else "Inaktiv",
         }
 
 

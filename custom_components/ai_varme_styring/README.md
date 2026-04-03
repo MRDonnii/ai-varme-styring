@@ -2,126 +2,72 @@
 
 ![AI Varme Styring logo](logo.png)
 
-Lokal Home Assistant-integration til AI-baseret varmestyring med valgbar beslutningsmotor.
+Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Aktuel version: 0.2.9**
+**Current version: 0.3.0**
 
-## Formål
+## Highlights
 
-Integrationen samler varmestyring, rapportering og observability i én HA-integration.
-Brugeren kan vælge mellem flere AI-motorer og stadig beholde en stabil, lokal styringslogik.
+- OpenClaw-based heating decisions with machine-readable JSON output
+- MQTT-backed decision delivery for stable Home Assistant adoption
+- Fixed AI setpoint ownership: your room target stays the main target
+- Optional Comfort Mode that adjusts internal behavior without rewriting your target
+- Richer decision reporting with timestamp, reason, diagnostics, and room actions
+- Dashboard-friendly sensors for room status, AI status, and decision context
 
-OpenClaw er nu den primært anbefalede beslutningsmotor.
-Integration med Ollama og Gemini understøttes fortsat som alternativer.
+## What is new in the upcoming release
 
-## Beslutningsmotorer
+### 1. MQTT-first OpenClaw decision path
 
-Integrationens beslutningslag understøtter:
-- `OpenClaw` *(anbefalet primær motor)*
-- `Ollama`
-- `Gemini`
+The OpenClaw heating flow can now publish finished decisions to MQTT and let Home Assistant consume the structured result from:
 
-Brugeren kan vælge i integrationens options:
-- `Primær beslutningsmotor`
-- `Fallback-motor`
-- `Rapportmotor`
-- `Payload-profil` for OpenClaw og provider-sporet (`light` eller `heavy`)
+- `homeassistant/ai_varme/openclaw/decision`
 
-## OpenClaw modelvalg
+This makes the decision chain easier to observe and more robust than instruction-wrapper style hooks.
 
-Hvis OpenClaw bruges, kan brugeren angive foretrukne modeller i options-flowet:
+### 2. Fixed room target ownership
 
-- `Foretrukken OpenClaw-model`: den model der bruges til primære beslutninger
-- `Fallback OpenClaw-model`: bruges hvis den foretrukne model ikke svarer
+The room AI setpoint is now treated as the user-owned main target.
+The runtime may optimize heat pump and radiator behavior around it, but it must not silently rewrite the helper target.
 
-Standardanbefalinger:
-| Felt | Standard |
-|---|---|
-| Foretrukken model | `gpt-5-mini` |
-| Fallback model | `gpt-4.1` |
+### 3. Comfort Mode
 
-**Vigtigt:** Vælg kun modeller der faktisk er aktiverede i din OpenClaw-instans.
-Integrationen sender model-hint videre til OpenClaw, men kan ikke verificere om modellen er tilgængelig.
+Comfort Mode is now a separate switchable behavior layer.
 
-## Sådan konfigureres AI (options-flowet)
+- When it is `off`, the room AI setpoint stays fixed and comfort bias is inactive.
+- When it is `on`, humidity, occupancy, comfort gap, and opening state may slightly influence internal heating behavior.
+- Comfort Mode does not overwrite the room target helper.
 
-Options-flowet er opdelt i tre sektioner:
+### 4. Better AI report quality
 
-### Generelle indstillinger
-- Navn og rum-opsætning.
-- Aktivering af temperaturkalibrering, bevægelsesøkonomi og PID-lag.
+The AI report now exposes more of the real decision context:
 
-### AI-udbydere
-- `Primær beslutningsmotor`: den motor der bruges til AI-beslutninger (anbefalet: `OpenClaw`)
-- `Fallback-motor`: bruges hvis primærmotoren fejler (anbefalet: `none` eller `Ollama`)
-- `Rapportmotor`: bruges til AI-genererede rapporter
-- `Foretrukken OpenClaw-model`: sendes som hint til OpenClaw (standard: `gpt-5-mini`)
-- `Fallback OpenClaw-model`: bruges hvis foretrukken model ikke svarer (standard: `gpt-4.1`)
+- last decision time
+- request and run identifiers
+- decision reason
+- diagnostics summary
+- override reasoning
+- comfort notes
 
-**Bemærk:** OpenClaw-modeller skal være aktiverede i brugerens OpenClaw-instans.
-Integrationen sender et model-hint — det er OpenClaw der afgør den endelige routing.
+## Installation with HACS
 
-### Avanceret styring
-- Timeout, intervaller og tekniske OpenClaw-parametre.
-- Flyttes hertil for at holde AI-udbyderssektionen ren.
+1. Open HACS in Home Assistant
+2. Add `https://github.com/MRDonnii/ai-varme-styring` as a custom repository
+3. Choose type `Integration`
+4. Install **AI Varme Styring**
+5. Restart Home Assistant
 
-## Rapportering og analyse
+## Core decision schema
 
-Rapportstrukturen er forbedret og inddelt i tre sektioner:
-
-- **Kort resume**: beslutningsmotor, model, overordnet vurdering
-- **Rum**: per-rum analyse med effektiv komfortgab og fugtighedsdata
-- **Punkter**: konkrete observationer og eventuelle advarsler
-
-Rapportkortet viser:
-- aktiv beslutningsmotor og model
-- fallback-motor
-- rapportmotor
-- seneste køretid i footeren
-
-## Fugtighed og komfortanalyse
-
-Fra v0.2.0 tages fugtighed med i komfortvurderingen:
-
-- Komfortgab kan afvige fra råtemperaturdeficit afhængigt af luftfugtighed.
-- Per-rum fugtighedssensor kan angives separat i rum-opsætningen.
-- Tør eller fugtig luft kan påvirke anbefalinger uden at tvinge mere varme.
-- AI-modellen gives eksplicit rumkontekst med effektivt komfortgab.
-
-## Stabilitet og performance
-
-- Koldstart-håndtering er forbedret: rumdata er tilgængeligt hurtigere efter HA-genstart.
-- Vigtige AI-sensorer trimmes for store attributter så Recorder undgår 16 KB-advarslen:
-  - `AI Status`
-  - `AI indikator`
-- Watchman er konfigureret til at ignorere arkiv- og backupmapper for at reducere falske advarsler.
-
-
-- [`/haconfig/docs/openclaw_heating_stack.md`](/haconfig/docs/openclaw_heating_stack.md)
-
-Driftsdetaljer for bridge og worker ligger her:
-- [`/haconfig/tools/systemd/README_openclaw_bridge.md`](/haconfig/tools/systemd/README_openclaw_bridge.md)
-
-## OpenClaw-flow
-
-OpenClaw bruges nu som en rigtig beslutningsmotor og ikke kun som en chat-model.
-
-Aktuelt flow:
-1. `ai_varme_styring` bygger en struktureret heating payload.
-2. Payload sendes til OpenClaw via hook-endpoint.
-3. OpenClaw returnerer `runId`.
-4. En lokal completion worker læser OpenClaw-sessionerne.
-5. Worker finder den endelige JSON-beslutning.
-6. Worker afleverer beslutningen til den lokale bridge-callback.
-7. Integrationen viser beslutningen i sensorer, status og rapportkort.
-
-## Endelig beslutningsschema
+Finished OpenClaw heating decisions are expected to look like this:
 
 ```json
 {
+  "request_id": "...",
+  "run_id": "...",
   "factor": 1.0,
-  "confidence": 95,
-  "reason": "Ingen rum kræver ændring – kun små afvigelser fra måltemperatur.",
+  "confidence": 88,
+  "reason": "Short explanation",
   "global": {
     "mode": "normal",
     "boost": false
@@ -130,87 +76,32 @@ Aktuelt flow:
 }
 ```
 
-## Hvad integrationen eksponerer i HA
+## OpenClaw and MQTT setup
 
-Vigtige felter og sensorer:
-- `AI beslutningsmotor`
-- `ai_decision_source`
-- `ai_primary_engine_display`
-- `ai_decision_source_display`
-- `ai_openclaw_meta`
-- `ai_struktureret_beslutning`
-- `ai_decision_payload`
-- `ai_decision_payload_openclaw`
-- `ai_decision_payload_provider`
-- `ai_report_payload`
-- `openclaw_bridge_stats`
+For the full OpenClaw setup guide, including the exact text block you can paste into OpenClaw-side tooling, see:
 
-Rapportkortet viser også:
-- beslutningsmotor
-- fallback-motor
-- rapportmotor
-- seneste køretid i footeren
+- [`OPENCLAW_MQTT_SETUP.md`](OPENCLAW_MQTT_SETUP.md)
 
-## Light og Heavy payloads
+## Important notes
 
-Der bruges to payload-profiler:
+- This public repository is integration-only.
+- Local Home Assistant configuration, secrets, dashboards, and private runtime state do not belong in the public repo.
+- MQTT credentials must come from environment variables or Home Assistant configuration, never hardcoded values.
 
-- `heavy`
-  - rig rumkontekst
-  - runtime flags
-  - priser
-  - bridge-/OpenClaw-metadata
-  - bedst til OpenClaw
-
-- `light`
-  - kompakt styringspayload
-  - bedst til hurtigere provider-kald og fallback
-
-## Vigtige filer i integrationsmappen
+## Files you will likely care about
 
 - `manifest.json`
 - `config_flow.py`
-- `const.py`
 - `coordinator.py`
 - `ai_client.py`
 - `sensor.py`
-- `switch.py`
-- `button.py`
 - `number.py`
-- `translations/`
+- `switch.py`
+- `CHANGELOG.md`
+- `OPENCLAW_MQTT_SETUP.md`
 
-## Runtime-filer udenfor integrationen
+## Release docs
 
-OpenClaw-runtime ligger bevidst udenfor selve integrationsmappen.
-De hører til Home Assistant-hostens drift og ikke til HACS-pakken alene.
-
-Vigtige runtime-filer:
-- `/haconfig/tools/openclaw_decision_bridge.py`
-- `/haconfig/tools/openclaw_session_completion_worker.py`
-- `/haconfig/tools/openclaw_bridge_ctl.sh`
-- `/haconfig/tools/openclaw_completion_worker_ctl.sh`
-- `/haconfig/tools/openclaw_services_ensure.sh`
-- `/haconfig/packages/openclaw_bridge_callback.yaml`
-
-## Midlertidige runtime-filer
-
-Følgende filer er drifts-/debugfiler og skal ikke behandles som kildekode:
-- `/haconfig/tools/openclaw_runtime/tmp/openclaw_bridge.log`
-- `/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_worker.log`
-- `/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_results.json`
-- `/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_worker_state.json`
-- `/haconfig/tools/openclaw_runtime/tmp/openclaw_services_ensure.log`
-
-## Hvad der ikke er autoritativt
-
-Den gamle mappe `ha-ai-heating-private` er ikke den aktive integrationskode.
-Den autoritative integration ligger i:
-- `/haconfig/custom_components/ai_varme_styring`
-
-## Status
-
-Integrationens nuværende mål er:
-- OpenClaw som reel primær beslutningsmotor
-- valgfri fallback til Ollama eller Gemini
-- klare sensorer og kort der viser hvilken motor der faktisk blev brugt
-- stabil lokal drift uden npm-afhængigheder
+- [`CHANGELOG.md`](CHANGELOG.md)
+- [`RELEASE_GUIDE.md`](RELEASE_GUIDE.md)
+- [`OPENCLAW_MQTT_SETUP.md`](OPENCLAW_MQTT_SETUP.md)
