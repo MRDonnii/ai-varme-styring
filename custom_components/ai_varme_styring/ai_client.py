@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ from .const import (
 
 LOGGER = logging.getLogger(__name__)
 OPENCLAW_RUNTIME_TMP_DIR = Path(
-    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/tools/openclaw_runtime/tmp")
+    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/custom_components/ai_varme_styring/runtime/tmp")
 )
 OPENCLAW_SESSIONS_DIR = Path(
     os.environ.get("OPENCLAW_SESSIONS_DIR", "/openclaw-data/config/agents/main/sessions")
@@ -45,8 +46,8 @@ OPENCLAW_RESULTS_FILE = Path(
         str(OPENCLAW_RUNTIME_TMP_DIR / "openclaw_completion_results.json"),
     )
 )
-OPENCLAW_RESULTS_FILE_HOST = Path("/haconfig/tools/openclaw_runtime/tmp/openclaw_completion_results.json")
-OPENCLAW_QUEUE_DIR_HOST = Path("/haconfig/tools/openclaw_runtime/tmp/openclaw_decision_queue")
+OPENCLAW_RESULTS_FILE_HOST = Path("/haconfig/custom_components/ai_varme_styring/runtime/tmp/openclaw_completion_results.json")
+OPENCLAW_QUEUE_DIR_HOST = Path("/haconfig/custom_components/ai_varme_styring/runtime/tmp/openclaw_decision_queue")
 OPENCLAW_RESULTS_FILE_LEGACY = Path("/config/_tmp_openclaw_completion_results.json")
 OPENCLAW_QUEUE_DIR_LEGACY = Path("/config/_tmp_openclaw_decision_queue")
 OPENCLAW_QUEUE_DIR_HOST_LEGACY = Path("/haconfig/_tmp_openclaw_decision_queue")
@@ -56,6 +57,28 @@ OPENCLAW_QUEUE_ENABLED = os.environ.get("OPENCLAW_QUEUE_ENABLED", "").strip().lo
     "yes",
     "on",
 }
+OPENCLAW_DIRECT_FIRST = os.environ.get("OPENCLAW_DIRECT_FIRST", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+OPENCLAW_USE_BRIDGE = os.environ.get("OPENCLAW_USE_BRIDGE", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+OPENCLAW_MQTT_DECISION_ENTITY = os.environ.get(
+    "OPENCLAW_MQTT_DECISION_ENTITY",
+    "sensor.ai_varme_openclaw_decision",
+).strip()
+OPENCLAW_MQTT_MAX_AGE_SEC = float(os.environ.get("OPENCLAW_MQTT_MAX_AGE_SEC", "300"))
+OPENCLAW_REPLY_TRANSPORT = os.environ.get("OPENCLAW_REPLY_TRANSPORT", "mqtt").strip() or "mqtt"
+OPENCLAW_REPLY_TOPIC = os.environ.get(
+    "OPENCLAW_REPLY_TOPIC",
+    "homeassistant/ai_varme/openclaw/decision",
+).strip() or "homeassistant/ai_varme/openclaw/decision"
 OPENCLAW_REQUEST_RE = re.compile(
     r"\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\b",
     re.I,
@@ -179,6 +202,17 @@ class AiProviderClient:
                 return candidate
         return self._candidate_queue_dirs()[0]
 
+    def _openclaw_queue_wait_budget(self, timeout_sec: float) -> float:
+        """Keep queue wait short so a slow queue does not consume the whole AI window."""
+        base = max(4.0, float(timeout_sec) * 0.45)
+        return min(12.0, base)
+
+    def _openclaw_session_wait_budget(self, timeout_sec: float, *, sessions_available: bool) -> float:
+        """Use a shorter budget when only callback/results polling is possible."""
+        extra = 12.0 if sessions_available else 4.0
+        cap = 40.0 if sessions_available else 24.0
+        return max(8.0, min(cap, float(timeout_sec) + extra))
+
     def __init__(self, hass) -> None:
         self.hass = hass
         self._debug_openclaw({"stage": "client_init"})
@@ -220,15 +254,21 @@ class AiProviderClient:
         def _build_prompt(payload: dict[str, Any], request_id: str = "") -> str:
             request_hint = ""
             if request_id:
-                request_hint = f"\nRequest ID: {request_id}\nKeep request_id available in your reasoning context."
+                request_hint = (
+                    f"\nRequest ID: {request_id}\n"
+                    "Return the same request_id unchanged in the JSON output."
+                )
             model_hint = ""
             if str(openclaw_model_preferred).strip():
                 model_hint += f"\nPreferred model: {str(openclaw_model_preferred).strip()}"
             if str(openclaw_model_fallback).strip():
                 model_hint += f"\nFallback model: {str(openclaw_model_fallback).strip()}"
             return (
-                "Return strict JSON only with this schema: "
+                "Return strict JSON only. No markdown, no prose before or after JSON. "
+                "Use this exact schema: "
                 '{'
+                '"request_id": "<same request id>", '
+                '"run_id": "<short id or run id>", '
                 '"factor": <number between 0.6 and 1.4>, '
                 '"confidence": <number 0-100>, '
                 '"reason": "<short danish text>", '
@@ -237,7 +277,16 @@ class AiProviderClient:
                 '{"name": "<room name>", "entity_id": "<heat pump or target entity id>", '
                 '"target_temperature": <number 7-25>, "mode": "heat|off|auto|eco", '
                 '"should_change": <true|false>, "reason": "<short danish text>"}'
-                "]"
+                "], "
+                '"context": <object>, '
+                '"diagnostics": <object>, '
+                '"input_summary": {'
+                '"outside_temperature": <number|null>, '
+                '"mode": "<normal|night|away|boost|eco|off>", '
+                '"boost": <true|false>, '
+                '"room_count": <integer>, '
+                '"occupied_rooms": <integer>'
+                "}"
                 "} "
                 "Rules: "
                 "Be factually consistent with the payload. "
@@ -254,6 +303,8 @@ class AiProviderClient:
                 "If no override is needed, keep rooms as an empty list but explain the top 1-2 rooms that were closest to needing action. "
                 "Only include rooms that need a concrete override. "
                 "Use factor=1.0 when room overrides already express the main decision. "
+                "Always include request_id and run_id in the output JSON. "
+                "Always include context, diagnostics and input_summary objects in output JSON. "
                 "Use short, precise Danish. "
                 "Base the decision on this heating context:\n"
                 + json.dumps(payload, ensure_ascii=False)
@@ -274,6 +325,8 @@ class AiProviderClient:
                     "model_preferred": str(openclaw_model_preferred).strip(),
                     "model_fallback": str(openclaw_model_fallback).strip(),
                     "queue_enabled": OPENCLAW_QUEUE_ENABLED,
+                    "direct_first": OPENCLAW_DIRECT_FIRST,
+                    "use_bridge": OPENCLAW_USE_BRIDGE,
                     "queue_dir_exists": any(path.exists() for path in self._candidate_queue_dirs()),
                     "sessions_dir_exists": OPENCLAW_SESSIONS_DIR.exists(),
                     "timeout_sec": float(openclaw_timeout_sec),
@@ -303,7 +356,36 @@ class AiProviderClient:
                 except Exception as err:  # noqa: BLE001
                     self._debug_openclaw({"stage": "try_openclaw_queue_error", "error": str(err)})
                     LOGGER.warning("OpenClaw queue path failed, trying next path: %s", err)
-            if str(openclaw_bridge_url).strip():
+            else:
+                self._debug_openclaw(
+                    {
+                        "stage": "try_openclaw_queue_skipped",
+                        "reason": "queue_disabled",
+                        "queue_wait_budget_sec": self._openclaw_queue_wait_budget(float(openclaw_timeout_sec)),
+                    }
+                )
+            openclaw_request_id = str(uuid.uuid4())
+            if OPENCLAW_DIRECT_FIRST and openclaw_enabled and str(openclaw_url).strip():
+                try:
+                    text = await self._async_call_openclaw(
+                        url=openclaw_url,
+                        token=openclaw_token,
+                        prompt=_build_prompt(payload_openclaw, openclaw_request_id),
+                        timeout_sec=float(openclaw_timeout_sec),
+                        context_payload=payload_openclaw,
+                        request_id=openclaw_request_id,
+                    )
+                    data = self._extract_json(text)
+                    factor, reason, confidence = self._validate_decision_factor(data)
+                    factor, reason, confidence, data = self._reconcile_reason_with_payload(
+                        payload_openclaw, factor, reason, confidence, data
+                    )
+                    self._debug_openclaw({"stage": "try_openclaw_direct_inline_ok"})
+                    return factor, reason, confidence, "openclaw_inline", data
+                except Exception as err:  # noqa: BLE001
+                    self._debug_openclaw({"stage": "try_openclaw_direct_inline_error", "error": str(err)})
+                    LOGGER.warning("OpenClaw direct inline path failed, trying next path: %s", err)
+            if OPENCLAW_USE_BRIDGE and str(openclaw_bridge_url).strip():
                 try:
                     text, bridge_source, bridge_meta = await self._async_call_openclaw_bridge(
                         url=openclaw_bridge_url,
@@ -325,13 +407,21 @@ class AiProviderClient:
                 except Exception as err:  # noqa: BLE001
                     self._debug_openclaw({"stage": "try_openclaw_bridge_error", "error": str(err)})
                     LOGGER.warning("OpenClaw bridge path failed, trying direct session path: %s", err)
-            request_id = str(uuid.uuid4())
+            elif str(openclaw_bridge_url).strip():
+                self._debug_openclaw(
+                    {
+                        "stage": "try_openclaw_bridge_skipped",
+                        "reason": "bridge_disabled_by_env",
+                    }
+                )
+            request_id = openclaw_request_id
             text, meta = await self._async_call_openclaw_with_session(
                 url=openclaw_url,
                 token=openclaw_token,
                 prompt=_build_prompt(payload_openclaw, request_id),
                 timeout_sec=float(openclaw_timeout_sec),
                 request_id=request_id,
+                context_payload=payload_openclaw,
                 openclaw_model_preferred=openclaw_model_preferred,
                 openclaw_model_fallback=openclaw_model_fallback,
             )
@@ -382,6 +472,14 @@ class AiProviderClient:
             except Exception as err:  # noqa: BLE001
                 last_engine_error[source] = str(err)
                 LOGGER.warning("%s decision failed, fallback chain continues: %s", source, err)
+
+        mqtt_decision = self._mqtt_sensor_decision()
+        if isinstance(mqtt_decision, dict):
+            try:
+                factor, reason, confidence = self._validate_decision_factor(mqtt_decision)
+                return factor, reason, confidence, "openclaw_mqtt_sensor", mqtt_decision
+            except Exception as err:  # noqa: BLE001
+                last_engine_error["openclaw_mqtt_sensor"] = str(err)
 
         if last_good is not None:
             try:
@@ -486,20 +584,35 @@ class AiProviderClient:
             return str(parts[0].get("text", "")).strip()
 
     async def _async_call_openclaw(
-        self, *, url: str, token: str, prompt: str, timeout_sec: float
+        self,
+        *,
+        url: str,
+        token: str,
+        prompt: str,
+        timeout_sec: float,
+        context_payload: dict[str, Any] | None = None,
+        request_id: str = "",
     ) -> str:
         """Call OpenClaw webhook endpoint and normalize text output for JSON parsing."""
         session = async_get_clientsession(self.hass)
         headers = {"Content-Type": "application/json"}
         if str(token).strip():
             headers["Authorization"] = f"Bearer {token.strip()}"
-        payload = {
+        payload: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
+        payload.setdefault("type", "heating_decision")
+        if request_id:
+            payload["request_id"] = request_id
+        payload.setdefault("reply_transport", OPENCLAW_REPLY_TRANSPORT)
+        payload.setdefault("reply_topic", OPENCLAW_REPLY_TOPIC)
+        payload.update(
+            {
             "message": prompt,
             "name": "HA Heating",
             "wakeMode": "now",
-            "deliver": False,
+            "deliver": True,
             "timeoutSeconds": int(max(3, min(60, round(timeout_sec)))),
-        }
+            }
+        )
         async with session.post(
             str(url).strip(),
             headers=headers,
@@ -531,6 +644,7 @@ class AiProviderClient:
         prompt: str,
         timeout_sec: float,
         request_id: str,
+        context_payload: dict[str, Any] | None = None,
         openclaw_model_preferred: str = "",
         openclaw_model_fallback: str = "",
     ) -> tuple[str, dict[str, Any]]:
@@ -540,22 +654,31 @@ class AiProviderClient:
         headers = {"Content-Type": "application/json"}
         if str(token).strip():
             headers["Authorization"] = f"Bearer {token.strip()}"
-        body = {
+        body: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
+        body.setdefault("type", "heating_decision")
+        body.setdefault("request_id", request_id)
+        body.setdefault("reply_transport", OPENCLAW_REPLY_TRANSPORT)
+        body.setdefault("reply_topic", OPENCLAW_REPLY_TOPIC)
+        body.update(
+            {
             "message": prompt,
             "name": f"HA Heating Bridge {request_id[:8]}",
             "wakeMode": "now",
-            "deliver": False,
+            "deliver": True,
             "timeoutSeconds": int(max(3, min(60, round(timeout_sec)))),
             "request_id": request_id,
             "model_preferred": str(openclaw_model_preferred).strip(),
             "model_fallback": str(openclaw_model_fallback).strip(),
-        }
+            }
+        )
         meta: dict[str, Any] = {
             "request_id": request_id,
             "openclaw_url": normalized_url,
             "requested_model": str(openclaw_model_preferred).strip(),
             "fallback_model": str(openclaw_model_fallback).strip(),
         }
+        sessions_available = OPENCLAW_SESSIONS_DIR.exists()
+        meta["session_poll_available"] = sessions_available
         started = asyncio.get_running_loop().time()
         async with session.post(
             normalized_url,
@@ -572,24 +695,30 @@ class AiProviderClient:
             if parsed and any(k in parsed for k in ("factor", "confidence", "reason")):
                 return json.dumps(parsed, ensure_ascii=False), meta
 
-        deadline = started + max(12.0, min(75.0, float(timeout_sec) + 20.0))
+        deadline = started + self._openclaw_session_wait_budget(
+            timeout_sec,
+            sessions_available=sessions_available,
+        )
         poll_checks = 0
         while asyncio.get_running_loop().time() < deadline:
             poll_checks += 1
-            decision = await self.hass.async_add_executor_job(
-                self._find_openclaw_session_decision,
-                request_id,
-            )
-            if isinstance(decision, dict):
-                meta["poll_checks"] = poll_checks
-                return json.dumps(decision, ensure_ascii=False), meta
             callback_decision = await self.hass.async_add_executor_job(
                 self._find_openclaw_callback_decision,
                 request_id,
             )
             if isinstance(callback_decision, dict):
                 meta["poll_checks"] = poll_checks
+                meta["result_source"] = "callback_results"
                 return json.dumps(callback_decision, ensure_ascii=False), meta
+            if sessions_available:
+                decision = await self.hass.async_add_executor_job(
+                    self._find_openclaw_session_decision,
+                    request_id,
+                )
+                if isinstance(decision, dict):
+                    meta["poll_checks"] = poll_checks
+                    meta["result_source"] = "session_files"
+                    return json.dumps(decision, ensure_ascii=False), meta
             await asyncio.sleep(0.5)
 
         # Grace period: callback delivery can land just after polling deadline.
@@ -605,6 +734,7 @@ class AiProviderClient:
                 meta["poll_checks"] = poll_checks
                 meta["late_callback"] = True
                 meta["grace_callback_checks"] = grace_checks
+                meta["result_source"] = "callback_results_late"
                 return json.dumps(callback_decision, ensure_ascii=False), meta
             await asyncio.sleep(0.35)
         meta["poll_checks"] = poll_checks
@@ -657,7 +787,7 @@ class AiProviderClient:
                 "request_path": str(request_path),
             }
         )
-        deadline = asyncio.get_running_loop().time() + max(8.0, min(45.0, float(timeout_sec) + 12.0))
+        deadline = asyncio.get_running_loop().time() + self._openclaw_queue_wait_budget(timeout_sec)
         try:
             while asyncio.get_running_loop().time() < deadline:
                 if await self.hass.async_add_executor_job(response_path.exists):
@@ -757,6 +887,76 @@ class AiProviderClient:
         bounded_factor = max(0.6, min(1.4, float(factor)))
         bounded_confidence = max(0.0, min(100.0, float(confidence)))
         return bounded_factor, reason.strip() or "AI standard", bounded_confidence
+
+    def _mqtt_sensor_decision(self) -> dict[str, Any] | None:
+        """Read latest MQTT decision sensor as fallback when API call paths fail."""
+        entity_id = str(OPENCLAW_MQTT_DECISION_ENTITY or "").strip()
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+
+        attrs = dict(state.attributes or {})
+        raw = attrs.get("raw") if isinstance(attrs.get("raw"), dict) else {}
+        payload = raw if raw else attrs
+        if not isinstance(payload, dict):
+            return None
+        factor_value = payload.get("factor")
+        if factor_value is None:
+            factor_value = state.state
+        confidence_value = payload.get("confidence", attrs.get("confidence"))
+        reason_value = payload.get("reason", attrs.get("reason"))
+        if factor_value in (None, "", "unknown", "unavailable"):
+            return None
+        if reason_value in (None, ""):
+            return None
+
+        age_sec: float | None = None
+        ts_text = payload.get("ts_utc") or attrs.get("ts_utc")
+        if isinstance(ts_text, str) and ts_text.strip():
+            ts_value = ts_text.strip()
+            if ts_value.endswith("Z"):
+                ts_value = ts_value[:-1] + "+00:00"
+            try:
+                parsed_ts = dt.datetime.fromisoformat(ts_value)
+                if parsed_ts.tzinfo is None:
+                    parsed_ts = parsed_ts.replace(tzinfo=dt.timezone.utc)
+                age_sec = (dt.datetime.now(dt.timezone.utc) - parsed_ts).total_seconds()
+            except Exception:  # noqa: BLE001
+                age_sec = None
+        elif getattr(state, "last_updated", None):
+            try:
+                updated = state.last_updated
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=dt.timezone.utc)
+                age_sec = (dt.datetime.now(dt.timezone.utc) - updated).total_seconds()
+            except Exception:  # noqa: BLE001
+                age_sec = None
+
+        if isinstance(age_sec, (int, float)) and age_sec > OPENCLAW_MQTT_MAX_AGE_SEC:
+            return None
+
+        return {
+            "factor": factor_value,
+            "confidence": confidence_value,
+            "reason": reason_value,
+            "decision_type": payload.get("decision_type", "heating_decision"),
+            "global": payload.get("global", {}),
+            "rooms": payload.get("rooms", []),
+            "context": payload.get("context", {}),
+            "diagnostics": payload.get("diagnostics", {}),
+            "input_summary": payload.get("input_summary", {}),
+            "run_id": payload.get("run_id") or attrs.get("run_id"),
+            "_openclaw_meta": {
+                "source": "openclaw_mqtt_sensor",
+                "entity_id": entity_id,
+                "request_id": payload.get("request_id") or attrs.get("request_id"),
+                "run_id": payload.get("run_id") or attrs.get("run_id"),
+                "ts_utc": payload.get("ts_utc") or attrs.get("ts_utc"),
+                "age_sec": round(float(age_sec), 2) if isinstance(age_sec, (int, float)) else None,
+            },
+        }
 
     def _normalize_openclaw_url(self, url: str) -> str:
         candidate = str(url or "").strip()

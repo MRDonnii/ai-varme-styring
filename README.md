@@ -2,80 +2,35 @@
 
 ![AI Varme Styring logo](custom_components/ai_varme_styring/logo.png)
 
-Lokal Home Assistant-integration til AI-baseret varmestyring med OpenClaw som primær beslutningsmotor og valgfri fallback til Ollama eller Gemini.
+Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-## Hvad integrationen gør
+**Current version: 0.3.0**
 
-- AI-baseret varmebeslutning med room-first logik
-- OpenClaw som primær beslutningsmotor med fallback-modelvalg
-- Valgfri fallback til Ollama eller Gemini ved fejl eller timeout
-- Fugtighedsbevidst komfortanalyse pr. rum
-- Strukturerede rapporter og statusfelter til dashboard og fejlfinding
-- Lokal drift med fokus på stabilitet og sikre standardvalg
+## Highlights
 
-## Installation via HACS
+- OpenClaw heating decisions with structured JSON output
+- MQTT-backed decision delivery to Home Assistant
+- Fixed room AI setpoint ownership
+- Optional Comfort Mode
+- Better decision reporting and diagnostics
+- HACS-ready integration packaging
 
-1. Åbn HACS i Home Assistant
-2. Vælg `Custom repositories`
-3. Tilføj `https://github.com/MRDonnii/ai-varme-styring`
-4. Vælg typen `Integration`
-5. Installer **AI Varme Styring**
-6. Genstart Home Assistant
+## Install with HACS
 
-## Konfiguration
+1. Open HACS in Home Assistant
+2. Add `https://github.com/MRDonnii/ai-varme-styring` as a custom repository
+3. Select type `Integration`
+4. Install **AI Varme Styring**
+5. Restart Home Assistant
 
-Integrationen understøtter flere beslutningsmotorer:
+## Documentation
 
-- `OpenClaw`
-- `Ollama`
-- `Gemini`
+- [`custom_components/ai_varme_styring/README.md`](custom_components/ai_varme_styring/README.md)
+- [`custom_components/ai_varme_styring/CHANGELOG.md`](custom_components/ai_varme_styring/CHANGELOG.md)
+- [`custom_components/ai_varme_styring/OPENCLAW_MQTT_SETUP.md`](custom_components/ai_varme_styring/OPENCLAW_MQTT_SETUP.md)
+- [`custom_components/ai_varme_styring/RELEASE_GUIDE.md`](custom_components/ai_varme_styring/RELEASE_GUIDE.md)
 
-Du kan blandt andet konfigurere:
+## Repository scope
 
-- primær beslutningsmotor
-- fallback-motor
-- rapportmotor
-- foretrukken OpenClaw-model
-- fallback OpenClaw-model
-- payload-profil (`light` eller `heavy`)
-
-## OpenClaw i praksis
-
-Når OpenClaw bruges, sender integrationen en struktureret payload med rumdata, komfortgap, temperaturer og relevante driftsoplysninger. OpenClaw returnerer en beslutning, som bagefter vises i Home Assistant som status, sensorattributter og rapportdata.
-
-Beslutningsflowet er designet til at være robust:
-
-- hurtige standardvalg ved fejl
-- fallback når primær motor ikke svarer
-- gyldig JSON-beslutning med bounds og sikkerhedsregler
-- tydelig visning af hvilken motor og model der faktisk blev brugt
-
-## Rapportering
-
-Rapportvisningen er bygget til at kunne bruges direkte i Home Assistant:
-
-- kort resume med aktiv motor og model
-- rumsektion med komfortanalyse
-- punkter med observationer og advarsler
-- tydelig angivelse af seneste køretid
-
-## Vigtige filer
-
-- `custom_components/ai_varme_styring/manifest.json`
-- `custom_components/ai_varme_styring/config_flow.py`
-- `custom_components/ai_varme_styring/coordinator.py`
-- `custom_components/ai_varme_styring/ai_client.py`
-- `custom_components/ai_varme_styring/sensor.py`
-- `custom_components/ai_varme_styring/README.md`
-
-## HACS metadata
-
-Repoet er sat op til HACS med:
-
-- root `hacs.json`
-- integration `custom_components/ai_varme_styring/hacs.json`
-- `render_readme: true`
-
-## Bemærk
-
-Hvis GitHub, HACS eller Home Assistant viser forskellige versionsnumre, skyldes det typisk cache eller forskellen mellem `tags`, `releases` og den installerede lokale version. Den version, HACS normalt skal bruge, findes under GitHub Releases.
+This repo must contain only the public integration package.
+It must not contain local Home Assistant configuration, secrets, dashboards, or private runtime state.

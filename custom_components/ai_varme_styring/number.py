@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import re
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
@@ -45,6 +49,9 @@ from .const import (
     RUNTIME_REVERT_TIMEOUT_MIN,
 )
 from .entity import AiVarmeBaseEntity
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _room_target_step(entry: ConfigEntry) -> float:
@@ -348,28 +355,84 @@ class AiVarmeRoomTargetControlNumber(AiVarmeBaseEntity, NumberEntity):
             model="AI Varme Styring Rum",
             via_device=(DOMAIN, entry.entry_id),
         )
+        self._optimistic_value: float | None = None
+
+    def _target_helper_entity(self) -> str:
+        cfg = {**self.entry.data, **self.entry.options}
+        for room_cfg in cfg.get(CONF_ROOMS, []) or []:
+            if str(room_cfg.get(CONF_ROOM_NAME, "")).strip().lower() == self._room_name.lower():
+                return str(room_cfg.get("room_target_number", "") or "").strip()
+        return ""
 
     @property
     def native_value(self) -> float | None:
         room = self._room_data()
+        target_entity = self._target_helper_entity()
+        if target_entity:
+            helper_state = self.hass.states.get(target_entity)
+            if helper_state is not None:
+                try:
+                    self._optimistic_value = None
+                    return float(helper_state.state)
+                except (TypeError, ValueError):
+                    pass
+        if self._optimistic_value is not None:
+            return float(self._optimistic_value)
+
         target = room.get("target")
         if target is None:
             return None
-        return float(target)
+
+        try:
+            value = float(target)
+        except (TypeError, ValueError):
+            return None
+
+        if bool(room.get("boost_active")):
+            try:
+                value -= float(room.get("boost_delta_c", 0.0))
+            except (TypeError, ValueError):
+                pass
+        return float(value)
 
     @property
     def available(self) -> bool:
+        target_entity = self._target_helper_entity()
+        if target_entity:
+            return self.hass is not None and self.hass.states.get(target_entity) is not None
         return bool(self._room_data())
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
-        room = self._room_data()
-        return {"mål_helper": str(room.get("target_number_entity", ""))}
+        return {"maal_helper": self._target_helper_entity()}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        target_entity = self._target_helper_entity()
+        if not target_entity:
+            return
+
+        @callback
+        def _handle_helper_change(event: Event) -> None:
+            new_state = event.data.get("new_state") if event else None
+            if new_state is None:
+                return
+            with contextlib.suppress(TypeError, ValueError):
+                self._optimistic_value = float(new_state.state)
+            self.async_write_ha_state()
+
+        self.async_on_remove(
+            async_track_state_change_event(self.hass, [target_entity], _handle_helper_change)
+        )
 
     async def async_set_native_value(self, value: float) -> None:
         room = self._room_data()
-        target_entity = room.get("target_number_entity")
-        target = float(value)
+        target_entity = self._target_helper_entity()
+        step = float(getattr(self, "_attr_native_step", 0.5) or 0.5)
+        target = round(float(value) / step) * step if step > 0 else float(value)
+        target = max(float(self.native_min_value), min(float(self.native_max_value), target))
+        self._optimistic_value = float(target)
+        self.async_write_ha_state()
         if target_entity:
             try:
                 await self.hass.services.async_call(
@@ -379,10 +442,24 @@ class AiVarmeRoomTargetControlNumber(AiVarmeBaseEntity, NumberEntity):
                     blocking=True,
                     context=self._context,
                 )
-            except Exception:
-                pass
-        await self.coordinator.async_set_room_target_override(self._room_name, target)
-        await self.coordinator.async_set_room_target_lock(self._room_name, target)
+            except Exception as err:
+                raise HomeAssistantError(
+                    f"Kunne ikke opdatere maal-helper {target_entity}: {err}"
+                ) from err
+
+        # The helper value is the authoritative room target. Keep the control
+        # responsive even if secondary runtime bookkeeping hits a transient error.
+        try:
+            await self.coordinator.async_set_room_target_override(self._room_name, target)
+            await self.coordinator.async_set_room_target_lock(self._room_name, target)
+        except Exception as err:
+            _LOGGER.warning(
+                "Room target runtime sync failed for %s -> %.1f: %s",
+                self._room_name,
+                target,
+                err,
+            )
+
         self.async_write_ha_state()
 
     def _room_data(self) -> dict:

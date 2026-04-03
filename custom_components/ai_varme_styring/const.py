@@ -185,6 +185,15 @@ AI_PRIMARY_ENGINE_OPTIONS: Final[list[str]] = [
     AI_PRIMARY_ENGINE_PROVIDER,
     AI_PRIMARY_ENGINE_OPENCLAW,
 ]
+
+# Accept both legacy provider-specific values and current canonical values
+# when reading stored config. UI should still prefer canonical options.
+AI_PRIMARY_ENGINE_ACCEPTED_OPTIONS: Final[list[str]] = [
+    AI_PRIMARY_ENGINE_PROVIDER,
+    AI_PRIMARY_ENGINE_OPENCLAW,
+    AI_PROVIDER_OLLAMA,
+    AI_PROVIDER_GEMINI,
+]
 PAYLOAD_PROFILE_LIGHT: Final = "light"
 PAYLOAD_PROFILE_HEAVY: Final = "heavy"
 PAYLOAD_PROFILE_OPTIONS: Final[list[str]] = [
@@ -198,6 +207,7 @@ RUNTIME_ECO_TARGET: Final = "runtime_eco_target"
 RUNTIME_PRESENCE_ECO_ENABLED: Final = "runtime_presence_eco_enabled"
 RUNTIME_PID_LAYER_ENABLED: Final = "runtime_pid_layer_enabled"
 RUNTIME_LEARNING_ENABLED: Final = "runtime_learning_enabled"
+RUNTIME_COMFORT_MODE_ENABLED: Final = "runtime_comfort_mode_enabled"
 RUNTIME_PRESENCE_AWAY_MIN: Final = "runtime_presence_away_min"
 RUNTIME_PRESENCE_RETURN_MIN: Final = "runtime_presence_return_min"
 RUNTIME_PID_KP: Final = "runtime_pid_kp"

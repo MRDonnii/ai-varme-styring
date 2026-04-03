@@ -59,12 +59,13 @@ from .const import (
     RUNTIME_REVERT_TIMEOUT_MIN,
     RUNTIME_PRESENCE_ECO_ENABLED,
     RUNTIME_LEARNING_ENABLED,
+    RUNTIME_COMFORT_MODE_ENABLED,
 )
 from .coordinator import AiVarmeCoordinator
 
 
 OPENCLAW_RUNTIME_TMP_DIR = Path(
-    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/tools/openclaw_runtime/tmp")
+    os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/custom_components/ai_varme_styring/runtime/tmp")
 )
 _TRACE_FILE = OPENCLAW_RUNTIME_TMP_DIR / "ai_varme_setup_trace.log"
 
@@ -111,6 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         RUNTIME_LEARNING_ENABLED: bool(
             cfg.get(CONF_ENABLE_LEARNING, DEFAULT_ENABLE_LEARNING)
         ),
+        RUNTIME_COMFORT_MODE_ENABLED: False,
         RUNTIME_PRESENCE_AWAY_MIN: float(
             cfg.get(CONF_PRESENCE_AWAY_MIN, DEFAULT_PRESENCE_AWAY_MIN)
         ),

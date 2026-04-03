@@ -25,9 +25,37 @@ def _num_or_zero(value: Any, decimals: int = 1) -> float:
         return 0.0
 
 
+def _safe_float(value: Any, default: float | None = None) -> float | None:
+    """Return float value or default for missing/invalid input."""
+    try:
+        if value in (None, "", "unknown", "unavailable", "none", "None"):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _openclaw_meta(data: dict[str, Any]) -> dict[str, Any]:
     meta = data.get("ai_openclaw_meta", {})
-    return meta if isinstance(meta, dict) else {}
+    if not isinstance(meta, dict):
+        return {}
+    cleaned = dict(meta)
+    response = cleaned.pop("openclaw_response", None)
+    if isinstance(response, dict):
+        cleaned["openclaw_response_summary"] = {
+            "keys": sorted(response.keys()),
+            "has_run_id": isinstance(response.get("runId"), str),
+            "has_response": bool(response.get("response")),
+            "has_output": bool(response.get("output")),
+            "has_text": bool(response.get("text")),
+            "has_message": bool(response.get("message")),
+        }
+    elif response is not None:
+        cleaned["openclaw_response_summary"] = {
+            "type": type(response).__name__,
+            "preview": str(response)[:160],
+        }
+    return cleaned
 
 
 def _payload_summary(payload: Any) -> dict[str, Any]:
@@ -258,16 +286,152 @@ def _format_report_long(
             room_summaries.add(summary.lower())
 
     point_lines = [f"- {line}" for line in _filtered_report_points(data, report, bullets)]
+    decision_lines = _current_decision_lines(_current_decision_snapshot(data))
+    decision_section_lines = [f"- {line}" if not line.startswith("- ") else line for line in decision_lines]
 
     sections: list[str] = []
     if top_lines:
         sections.append("Kort resume\n" + "\n".join(top_lines))
     if room_lines:
         sections.append("Rum\n" + "\n".join(room_lines))
+    if decision_section_lines:
+        sections.append("Aktiv beslutning nu\n" + "\n".join(decision_section_lines))
     if point_lines:
         sections.append("Punkter\n" + "\n".join(point_lines))
 
     return "\n\n".join(section for section in sections if section).strip() or long_text
+
+
+def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    structured = data.get("ai_structured_decision", {})
+    decision = structured if isinstance(structured, dict) else {}
+    global_block = decision.get("global", {})
+    global_decision = global_block if isinstance(global_block, dict) else {}
+    room_rows = decision.get("rooms", [])
+    room_directives = room_rows if isinstance(room_rows, list) else []
+
+    active_rooms: list[dict[str, Any]] = []
+    for row in room_directives:
+        if not isinstance(row, dict):
+            continue
+        if row.get("should_change") is False:
+            continue
+        room_name = str(row.get("name", "")).strip() or "Rum"
+        active_rooms.append(
+            {
+                "name": room_name,
+                "entity_id": str(row.get("entity_id", "")).strip(),
+                "target_temperature": row.get("target_temperature"),
+                "mode": str(row.get("mode", "")).strip(),
+                "reason": str(row.get("reason", "")).strip(),
+            }
+        )
+
+    source_display = _display_engine(data.get("ai_decision_source_display"), default="Ukendt")
+    source_raw = str(data.get("ai_decision_source", "")).strip()
+    prev_source_display = _display_engine(data.get("ai_prev_decision_source_display"), default="Ukendt")
+    prev_source_raw = str(data.get("ai_prev_decision_source", "")).strip()
+    decision_reason = str(data.get("ai_reason", "")).strip()
+    prev_reason = str(data.get("ai_prev_reason", "")).strip()
+    try:
+        factor = float(data.get("ai_factor"))
+    except (TypeError, ValueError):
+        factor = None
+    try:
+        confidence = float(data.get("ai_confidence"))
+    except (TypeError, ValueError):
+        confidence = None
+    try:
+        prev_factor = float(data.get("ai_prev_factor"))
+    except (TypeError, ValueError):
+        prev_factor = None
+    try:
+        prev_confidence = float(data.get("ai_prev_confidence"))
+    except (TypeError, ValueError):
+        prev_confidence = None
+
+    return {
+        "from_source_display": prev_source_display,
+        "from_source": prev_source_raw,
+        "source_display": source_display,
+        "source": source_raw,
+        "transition": str(data.get("ai_decision_transition", "")).strip(),
+        "from_factor": prev_factor,
+        "from_confidence": prev_confidence,
+        "from_reason": prev_reason,
+        "factor": factor,
+        "confidence": confidence,
+        "reason": decision_reason,
+        "global": {
+            "mode": str(global_decision.get("mode", "")).strip(),
+            "boost": bool(global_decision.get("boost", False)),
+        },
+        "room_decisions_count": len(active_rooms),
+        "room_decisions": active_rooms,
+    }
+
+
+def _current_decision_lines(snapshot: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    transition = str(snapshot.get("transition", "")).strip()
+    if transition:
+        lines.append(f"Fra -> til: {transition}")
+    else:
+        from_src = str(snapshot.get("from_source_display", "")).strip()
+        to_src = str(snapshot.get("source_display", "")).strip()
+        if from_src or to_src:
+            lines.append(f"Fra -> til: {from_src or 'Ukendt'} -> {to_src or 'Ukendt'}")
+
+    source_display = str(snapshot.get("source_display", "")).strip()
+    if source_display:
+        lines.append(f"Kilde: {source_display}")
+
+    from_factor = snapshot.get("from_factor")
+    from_confidence = snapshot.get("from_confidence")
+    if isinstance(from_factor, (int, float)) or isinstance(from_confidence, (int, float)):
+        from_factor_text = f"{float(from_factor):.2f}" if isinstance(from_factor, (int, float)) else "ukendt"
+        from_conf_text = f"{float(from_confidence):.1f}%" if isinstance(from_confidence, (int, float)) else "ukendt"
+        lines.append(f"Fra faktor: {from_factor_text} | Fra konfidens: {from_conf_text}")
+
+    factor = snapshot.get("factor")
+    confidence = snapshot.get("confidence")
+    if isinstance(factor, (int, float)) or isinstance(confidence, (int, float)):
+        factor_text = f"{float(factor):.2f}" if isinstance(factor, (int, float)) else "ukendt"
+        conf_text = f"{float(confidence):.1f}%" if isinstance(confidence, (int, float)) else "ukendt"
+        lines.append(f"Faktor: {factor_text} | Konfidens: {conf_text}")
+
+    reason = str(snapshot.get("reason", "")).strip()
+    if reason:
+        lines.append(f"Aarsag: {reason}")
+    from_reason = str(snapshot.get("from_reason", "")).strip()
+    if from_reason and from_reason.lower() != reason.lower():
+        lines.append(f"Fra aarsag: {from_reason}")
+
+    global_block = snapshot.get("global", {})
+    if isinstance(global_block, dict):
+        mode = str(global_block.get("mode", "")).strip()
+        if mode:
+            boost_txt = "on" if bool(global_block.get("boost", False)) else "off"
+            lines.append(f"Global mode: {mode} | Boost: {boost_txt}")
+
+    room_decisions = snapshot.get("room_decisions", [])
+    if isinstance(room_decisions, list) and room_decisions:
+        lines.append("Rum-overrides:")
+        for row in room_decisions[:8]:
+            if not isinstance(row, dict):
+                continue
+            room_name = str(row.get("name", "Rum")).strip() or "Rum"
+            target = row.get("target_temperature")
+            mode = str(row.get("mode", "")).strip()
+            reason = str(row.get("reason", "")).strip()
+            target_txt = f"{target}C" if isinstance(target, (int, float)) else "-"
+            mode_txt = mode or "-"
+            line = f"- {room_name}: target {target_txt}, mode {mode_txt}"
+            if reason:
+                line += f" ({reason})"
+            lines.append(line)
+
+    return _dedupe_lines(lines)
 
 
 async def async_setup_entry(
@@ -275,6 +439,8 @@ async def async_setup_entry(
 ) -> None:
     data = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
+        AiVarmeFactorSensor(data["coordinator"], entry),
+        AiVarmeConfidenceSensor(data["coordinator"], entry),
         AiVarmeStatusSensor(data["coordinator"], entry),
         AiVarmeIndicatorSensor(data["coordinator"], entry),
         AiVarmeDecisionSourceSensor(data["coordinator"], entry),
@@ -302,6 +468,51 @@ async def async_setup_entry(
         entities.append(AiVarmeRoomStatusSensor(data["coordinator"], entry, room_name))
         entities.append(AiVarmeRoomTargetSensor(data["coordinator"], entry, room_name))
     async_add_entities(entities)
+
+
+class AiVarmeFactorSensor(AiVarmeBaseEntity, SensorEntity):
+    """Current AI factor as a dedicated sensor."""
+
+    _attr_name = "AI faktor"
+    _attr_icon = "mdi:tune-variant"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_ai_factor"
+
+    @property
+    def native_value(self) -> float:
+        data = self.coordinator.data or {}
+        value = data.get("ai_factor")
+        if value is not None:
+            return _num_or_zero(value, 2)
+        mqtt_state = self.coordinator.hass.states.get("sensor.ai_varme_openclaw_decision")
+        if mqtt_state is not None:
+            return _num_or_zero(mqtt_state.state, 2)
+        return 0.0
+
+
+class AiVarmeConfidenceSensor(AiVarmeBaseEntity, SensorEntity):
+    """Current AI confidence as a dedicated sensor."""
+
+    _attr_name = "AI konfidens"
+    _attr_icon = "mdi:percent"
+    _attr_native_unit_of_measurement = "%"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_ai_confidence_value"
+
+    @property
+    def native_value(self) -> float:
+        data = self.coordinator.data or {}
+        value = data.get("ai_confidence")
+        if value is not None:
+            return _num_or_zero(value, 1)
+        mqtt_state = self.coordinator.hass.states.get("sensor.ai_varme_openclaw_decision")
+        if mqtt_state is not None:
+            return _num_or_zero(mqtt_state.attributes.get("confidence"), 1)
+        return 0.0
 
 
 def _room_slug(room_name: str) -> str:
@@ -363,8 +574,8 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
             return "Ukendt"
         if room.get("opening_active"):
             return "Pause pga. åbning"
-        deficit = float(room.get("deficit", 0.0))
-        surplus = float(room.get("surplus", 0.0))
+        deficit = _safe_float(room.get("deficit"), 0.0)
+        surplus = _safe_float(room.get("surplus"), 0.0)
         if deficit > 0:
             return "Varmebehov"
         if surplus > 0:
@@ -376,11 +587,59 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
         room = self._room_data()
         if not room:
             return {}
+        comfort_mode_active = bool((self.coordinator.data or {}).get("comfort_mode_enabled", False))
+        target_value = room.get("target")
+        target_entity = str(room.get("target_number_entity", "") or "").strip()
+        if target_entity:
+            helper_state = self.hass.states.get(target_entity)
+            if helper_state is not None:
+                helper_target = _safe_float(helper_state.state)
+                if helper_target is not None:
+                    target_value = helper_target
+        elif bool(room.get("boost_active", False)):
+            base_target = _safe_float(room.get("target"))
+            boost_delta = _safe_float(room.get("boost_delta_c"))
+            if base_target is not None and boost_delta is not None:
+                target_value = base_target - boost_delta
+        deficit = _safe_float(room.get("deficit"), 0.0) or 0.0
+        comfort_gap = _safe_float(room.get("comfort_gap"), 0.0) or 0.0
+        comfort_band = str(room.get("comfort_band") or "").strip()
+        humidity = _safe_float(room.get("humidity"))
+        opening_active = bool(room.get("opening_active"))
+        occupancy_active = bool(room.get("occupancy_active"))
+        comfort_reason = "Komfortmode er slukket."
+        heat_need_source = "temperatur"
+        if comfort_mode_active:
+            if opening_active:
+                comfort_reason = "Komfort ignoreres midlertidigt, fordi rummet er sat på pause pga. åbning."
+            elif not occupancy_active:
+                comfort_reason = "Komfort ignoreres, fordi rummet ikke er aktivt optaget lige nu."
+            elif comfort_gap > deficit + 0.05:
+                heat_need_source = "komfort"
+                if humidity is not None and comfort_band == "tør":
+                    comfort_reason = f"Tør luft ({humidity:.0f}%) løfter det oplevede varmebehov lidt."
+                elif humidity is not None and comfort_band == "fugtig":
+                    comfort_reason = f"Høj fugt ({humidity:.0f}%) påvirker komforten og holder styringen mere forsigtig."
+                else:
+                    comfort_reason = "Oplevet komfort vejer lidt tungere end rå temperatur lige nu."
+            elif humidity is not None and comfort_band in {"tør", "fugtig"}:
+                comfort_reason = f"Fugt ({humidity:.0f}%) overvåges, men ændrer ikke varmebehovet lige nu."
+            else:
+                comfort_reason = "Komfortmode er aktiv, men rå temperatur er stadig det styrende signal."
         return {
             "temperatur": room.get("temperature"),
             "temperatur_raw": room.get("temperature_raw"),
-            "ai_mål": room.get("target"),
+            "ai_mål": target_value,
             "eco_mål": room.get("eco_target"),
+            "komfort_mode_aktiv": comfort_mode_active,
+            "komfort_target": room.get("comfort_target"),
+            "komfort_offset_c": room.get("comfort_offset_c"),
+            "komfort_gap": room.get("comfort_gap"),
+            "effektivt_varmebehov": room.get("effective_gap"),
+            "komfort_bånd": room.get("comfort_band"),
+            "komfort_årsag": comfort_reason,
+            "varmebehovskilde": heat_need_source,
+            "fugt": room.get("humidity"),
             "eco_away_minutter": room.get("presence_away_min"),
             "eco_return_minutter": room.get("presence_return_min"),
             "underskud": room.get("deficit"),
@@ -450,12 +709,24 @@ class AiVarmeRoomTargetSensor(AiVarmeRoomBaseSensor):
     @property
     def native_value(self) -> float | None:
         room = self._room_data()
-        target = room.get("target")
-        if target is None:
-            return None
         try:
+            target_entity = str(room.get("target_number_entity", "") or "").strip()
+            if target_entity:
+                helper_state = self.hass.states.get(target_entity)
+                if helper_state is not None:
+                    helper_target = _safe_float(helper_state.state)
+                    if helper_target is not None:
+                        return float(helper_target)
+
+            target = _safe_float(room.get("target"))
+            if target is None:
+                return None
+            if bool(room.get("boost_active", False)):
+                boost_delta = _safe_float(room.get("boost_delta_c"))
+                if boost_delta is not None:
+                    target -= boost_delta
             return float(target)
-        except (TypeError, ValueError):
+        except Exception:
             return None
 
 
@@ -510,6 +781,9 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "rum_navne": room_names,
             "utilgængelige_sensorer": unavailable,
             "utilgængelige_sensorer_antal": len(unavailable) if isinstance(unavailable, list) else 0,
+            "komfort_mode_aktiv": data.get("comfort_mode_enabled", False),
+            "komfort_mode_sidst_skiftet": data.get("comfort_mode_last_changed"),
+            "komfort_mode_status": data.get("comfort_mode_status"),
             "presence_eco_aktiveret": data.get("presence_eco_enabled"),
             "presence_eco_sidst_skiftet": data.get("presence_eco_last_changed"),
             "ai_beslutningstype": data.get("ai_structured_decision", {}).get("global", {}).get("mode")
@@ -532,6 +806,11 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_primary_engine_display": data.get("ai_primary_engine_display"),
             "ai_decision_source": data.get("ai_decision_source"),
             "ai_decision_source_display": data.get("ai_decision_source_display"),
+            "ai_prev_decision_source": data.get("ai_prev_decision_source"),
+            "ai_prev_decision_source_display": data.get("ai_prev_decision_source_display"),
+            "ai_decision_transition": data.get("ai_decision_transition"),
+            "ai_last_fallback_reason": data.get("ai_last_fallback_reason", ""),
+            "ai_last_errors": data.get("ai_last_errors", {}),
             "ai_fallback_count": data.get("ai_fallback_count", 0),
             "openclaw_enabled": data.get("openclaw_enabled", False),
             "openclaw_bridge_url": data.get("openclaw_bridge_url", ""),
@@ -581,6 +860,8 @@ class AiVarmeIndicatorSensor(AiVarmeBaseEntity, SensorEntity):
             "provider_error_state": data.get("provider_error_state", False),
             "ai_decision_source": data.get("ai_decision_source"),
             "ai_decision_source_display": data.get("ai_decision_source_display"),
+            "ai_last_fallback_reason": data.get("ai_last_fallback_reason", ""),
+            "ai_last_errors": data.get("ai_last_errors", {}),
             "ai_fallback_count": data.get("ai_fallback_count", 0),
             "openclaw_bridge_stats_updated": data.get("openclaw_bridge_stats_updated"),
             "openclaw_ok": bridge_stats.get("openclaw_ok"),
@@ -589,9 +870,11 @@ class AiVarmeIndicatorSensor(AiVarmeBaseEntity, SensorEntity):
             "openclaw_run_id": meta.get("openclaw_run_id"),
             "openclaw_request_id": meta.get("request_id"),
             "openclaw_latency_ms": meta.get("latency_ms"),
+            "openclaw_runtime_health": data.get("openclaw_runtime_health"),
             "openclaw_model_requested": data.get("openclaw_model_preferred"),
             "openclaw_model_fallback": data.get("openclaw_model_fallback"),
             "openclaw_model_actual": meta.get("actual_model") or data.get("openclaw_model_preferred"),
+            "openclaw_runtime_status": data.get("openclaw_runtime_status", {}),
             "legacy_conflicts": data.get("legacy_conflicts", []),
         }
 
@@ -625,6 +908,8 @@ class AiVarmeDecisionSourceSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_primary_engine_display": data.get("ai_primary_engine_display"),
             "ai_decision_source": data.get("ai_decision_source"),
             "ai_decision_source_display": data.get("ai_decision_source_display"),
+            "ai_last_fallback_reason": data.get("ai_last_fallback_reason", ""),
+            "ai_last_errors": data.get("ai_last_errors", {}),
             "ai_provider": data.get("ai_provider"),
             "ai_model_fast": data.get("ai_model_fast"),
             "ai_model_report": data.get("ai_model_report"),
@@ -639,7 +924,9 @@ class AiVarmeDecisionSourceSensor(AiVarmeBaseEntity, SensorEntity):
             "openclaw_request_id": meta.get("request_id"),
             "openclaw_callback_url": meta.get("callback_url"),
             "openclaw_latency_ms": meta.get("latency_ms"),
-            "openclaw_response": meta.get("openclaw_response"),
+            "openclaw_response_summary": meta.get("openclaw_response_summary"),
+            "openclaw_runtime_health": data.get("openclaw_runtime_health"),
+            "openclaw_runtime_status": data.get("openclaw_runtime_status", {}),
         }
 
 
@@ -882,6 +1169,14 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
         report = data.get("report", {})
         short_text = report.get("short", "Afventer data")
         bullets = report.get("bullets", [])
+        decision_snapshot = _current_decision_snapshot(data)
+        decision_lines = _current_decision_lines(decision_snapshot)
+        decision_transition = str(decision_snapshot.get("transition", "")).strip()
+        if not decision_transition:
+            decision_transition = (
+                f"{decision_snapshot.get('from_source_display', 'Ukendt')} -> "
+                f"{decision_snapshot.get('source_display', 'Ukendt')}"
+            )
         meta = _openclaw_meta(data)
         fallback_display = _display_engine(data.get("ai_fallback_engine_display"))
         report_engine_display = _display_engine(
@@ -916,7 +1211,12 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_primary_engine_display": data.get("ai_primary_engine_display"),
             "ai_decision_source": data.get("ai_decision_source"),
             "ai_decision_source_display": data.get("ai_decision_source_display"),
-            "ai_openclaw_meta": data.get("ai_openclaw_meta", {}),
+            "ai_prev_decision_source": data.get("ai_prev_decision_source"),
+            "ai_prev_decision_source_display": data.get("ai_prev_decision_source_display"),
+            "ai_decision_transition": decision_transition,
+            "ai_last_fallback_reason": data.get("ai_last_fallback_reason", ""),
+            "ai_last_errors": data.get("ai_last_errors", {}),
+            "ai_openclaw_meta": meta,
             "ai_decision_payload_summary": _payload_summary(data.get("ai_decision_payload")),
             "ai_decision_payload_openclaw_summary": _payload_summary(
                 data.get("ai_decision_payload_openclaw")
@@ -948,6 +1248,13 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_rapport_interval_min": data.get("ai_report_interval_min"),
             "ai_provider_ready": data.get("ai_provider_ready"),
             "ai_confidence": data.get("ai_confidence"),
+            "ai_prev_factor": data.get("ai_prev_factor"),
+            "ai_prev_confidence": data.get("ai_prev_confidence"),
+            "ai_prev_reason": data.get("ai_prev_reason"),
+            "aktiv_beslutning": decision_snapshot,
+            "aktive_beslutninger_nu": decision_lines,
+            "aktive_rum_beslutninger": decision_snapshot.get("room_decisions", []),
+            "aktive_rum_beslutninger_antal": decision_snapshot.get("room_decisions_count", 0),
             "elpris": _num_or_zero(data.get("el_price"), 3),
             "gaspris": _num_or_zero(data.get("gas_price"), 3),
             "fjernvarmepris": _num_or_zero(data.get("district_heat_price"), 3),
