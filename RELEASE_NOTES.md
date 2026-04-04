@@ -1,14 +1,8 @@
-Release v0.3.1 - OpenClaw setup and auth fix
+Release v0.3.2 - OpenClaw hook payload compatibility
 
-This release fixes the OpenClaw setup path for new installations and adds flexible OpenClaw authentication in the integration flow.
+This release hardens the OpenClaw heating path for new instances that were accepting the webhook call but dropping the actual room telemetry in runtime.
 
 Included changes:
-- Fixed OpenClaw config flow so `openclaw_url` is enough to pass validation when OpenClaw is selected as the primary engine.
-- Added support for either `OpenClaw token` or `OpenClaw kode/password` in the integration UI and runtime.
-- Kept token as the preferred path when both token and password are set.
-
-Checks to perform before publishing:
-- Confirm `manifest.json` version is `0.3.1`.
-- Confirm `README.md` and `custom_components/ai_varme_styring/README.md` mention the new OpenClaw auth flow.
-- Confirm no secrets, private IPs, or local paths leaked into the repo.
-- Confirm Python compile succeeds for the updated integration files.
+- The integration now sends the heating payload as top-level fields and as nested `context`, `input`, and `heating_context` objects.
+- Malformed OpenClaw outputs are rejected earlier when `global`, `rooms`, `diagnostics`, or `input_summary` are returned with the wrong shape.
+- The direct session path now consistently supports password auth as well as token auth.

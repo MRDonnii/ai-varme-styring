@@ -2,6 +2,19 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.2
+
+Date: 2026-04-04
+
+### Fixed
+- **OpenClaw hook payload compatibility**:
+  - the integration now sends heating telemetry both as top-level fields and as nested `context`, `input`, and `heating_context` objects
+  - this prevents OpenClaw runtimes from dropping room telemetry when their wrapper only reads one payload location
+- **Malformed OpenClaw output handling**:
+  - outputs with invalid `global`, `rooms`, `diagnostics`, or `input_summary` shapes are now rejected earlier instead of being treated as valid decisions
+- **OpenClaw direct session auth path**:
+  - the session-based OpenClaw call now consistently carries the password auth field as well as token auth
+
 ## v0.3.1
 
 Date: 2026-04-04
