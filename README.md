@@ -4,7 +4,7 @@
 
 Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Current version: 0.3.0**
+**Current version: 0.3.1**
 
 ## Highlights
 
@@ -13,6 +13,7 @@ Home Assistant integration for AI-based heating control with OpenClaw, MQTT-back
 - Fixed room AI setpoint ownership
 - Optional Comfort Mode
 - Better decision reporting and diagnostics
+- OpenClaw token or password-based authentication in the integration flow
 - HACS-ready integration packaging
 
 ## Install with HACS
