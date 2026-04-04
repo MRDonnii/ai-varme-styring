@@ -596,6 +596,40 @@ class AiProviderClient:
             headers["X-OpenClaw-Password"] = str(password).strip()
         return headers
 
+    def _openclaw_request_body(
+        self,
+        *,
+        prompt: str,
+        timeout_sec: float,
+        name: str,
+        request_id: str = "",
+        context_payload: dict[str, Any] | None = None,
+        extra_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        source_context: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
+        if request_id:
+            source_context.setdefault("request_id", request_id)
+        source_context.setdefault("type", "heating_decision")
+        source_context.setdefault("reply_transport", OPENCLAW_REPLY_TRANSPORT)
+        source_context.setdefault("reply_topic", OPENCLAW_REPLY_TOPIC)
+
+        body: dict[str, Any] = dict(source_context)
+        # Some OpenClaw runtimes only inspect nested context/input objects.
+        # Duplicate the heating payload there so new instances do not lose room telemetry.
+        body["context"] = dict(source_context)
+        body["input"] = dict(source_context)
+        body["heating_context"] = dict(source_context)
+        body.update({
+            "message": prompt,
+            "name": name,
+            "wakeMode": "now",
+            "deliver": True,
+            "timeoutSeconds": int(max(3, min(60, round(timeout_sec)))),
+        })
+        if extra_fields:
+            body.update(extra_fields)
+        return body
+
     async def _async_call_openclaw(
         self,
         *,
@@ -610,20 +644,12 @@ class AiProviderClient:
         """Call OpenClaw webhook endpoint and normalize text output for JSON parsing."""
         session = async_get_clientsession(self.hass)
         headers = self._openclaw_headers(token=token, password=password)
-        payload: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
-        payload.setdefault("type", "heating_decision")
-        if request_id:
-            payload["request_id"] = request_id
-        payload.setdefault("reply_transport", OPENCLAW_REPLY_TRANSPORT)
-        payload.setdefault("reply_topic", OPENCLAW_REPLY_TOPIC)
-        payload.update(
-            {
-            "message": prompt,
-            "name": "HA Heating",
-            "wakeMode": "now",
-            "deliver": True,
-            "timeoutSeconds": int(max(3, min(60, round(timeout_sec)))),
-            }
+        payload = self._openclaw_request_body(
+            prompt=prompt,
+            timeout_sec=timeout_sec,
+            name="HA Heating",
+            request_id=request_id,
+            context_payload=context_payload,
         )
         async with session.post(
             str(url).strip(),
@@ -653,6 +679,7 @@ class AiProviderClient:
         *,
         url: str,
         token: str,
+        password: str,
         prompt: str,
         timeout_sec: float,
         request_id: str,
@@ -664,22 +691,16 @@ class AiProviderClient:
         normalized_url = self._normalize_openclaw_url(url)
         session = async_get_clientsession(self.hass)
         headers = self._openclaw_headers(token=token, password=password)
-        body: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
-        body.setdefault("type", "heating_decision")
-        body.setdefault("request_id", request_id)
-        body.setdefault("reply_transport", OPENCLAW_REPLY_TRANSPORT)
-        body.setdefault("reply_topic", OPENCLAW_REPLY_TOPIC)
-        body.update(
-            {
-            "message": prompt,
-            "name": f"HA Heating Bridge {request_id[:8]}",
-            "wakeMode": "now",
-            "deliver": True,
-            "timeoutSeconds": int(max(3, min(60, round(timeout_sec)))),
-            "request_id": request_id,
-            "model_preferred": str(openclaw_model_preferred).strip(),
-            "model_fallback": str(openclaw_model_fallback).strip(),
-            }
+        body = self._openclaw_request_body(
+            prompt=prompt,
+            timeout_sec=timeout_sec,
+            name=f"HA Heating Bridge {request_id[:8]}",
+            request_id=request_id,
+            context_payload=context_payload,
+            extra_fields={
+                "model_preferred": str(openclaw_model_preferred).strip(),
+                "model_fallback": str(openclaw_model_fallback).strip(),
+            },
         )
         meta: dict[str, Any] = {
             "request_id": request_id,
@@ -893,6 +914,14 @@ class AiProviderClient:
             raise ValueError("confidence must be numeric")
         if not isinstance(reason, str):
             raise ValueError("reason must be string")
+        if "global" in data and data.get("global") is not None and not isinstance(data.get("global"), dict):
+            raise ValueError("global must be object when present")
+        if "rooms" in data and not isinstance(data.get("rooms"), list):
+            raise ValueError("rooms must be array")
+        if "diagnostics" in data and data.get("diagnostics") is not None and not isinstance(data.get("diagnostics"), dict):
+            raise ValueError("diagnostics must be object when present")
+        if "input_summary" in data and data.get("input_summary") is not None and not isinstance(data.get("input_summary"), dict):
+            raise ValueError("input_summary must be object when present")
         bounded_factor = max(0.6, min(1.4, float(factor)))
         bounded_confidence = max(0.0, min(100.0, float(confidence)))
         return bounded_factor, reason.strip() or "AI standard", bounded_confidence

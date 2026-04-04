@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Current version: 0.3.1**
+**Current version: 0.3.2**
 
 ## Highlights
 
@@ -36,6 +36,13 @@ Authentication can now use either:
 - `OpenClaw kode/password`
 
 If both are set, token is preferred.
+
+### 1c. Hook payload compatibility
+
+OpenClaw webhook requests now duplicate the heating payload as top-level fields and as nested `context`, `input`, and `heating_context` objects.
+This makes new OpenClaw instances more robust when their runtime wrapper expects the heating telemetry in a specific location.
+
+Malformed OpenClaw outputs are also rejected earlier if `global`, `rooms`, `diagnostics`, or `input_summary` come back in the wrong shape.
 
 ### 2. Fixed room target ownership
 
