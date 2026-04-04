@@ -121,6 +121,91 @@ Success criteria:
 - No manual test-forwarding is required
 ```
 
+
+## Required runtime forwarding layer
+
+A successful webhook call is not enough on its own.
+A healthy OpenClaw heating setup must also have a worker or routing layer that forwards finished decision JSON to MQTT.
+
+That means the real working chain is:
+
+```text
+HA webhook input
+-> OpenClaw run
+-> finished decision JSON in run or session output
+-> openclaw-ha-completion-worker.py
+-> forward-ha-heating-json-to-mqtt.sh
+-> openclaw-ha-hook-forwarder.py
+-> publish-heating-decision.js
+-> MQTT
+```
+
+If the model can generate valid JSON but MQTT never updates, the missing piece is usually this worker or forwarder layer.
+
+## What must be validated before forwarding
+
+Before a result is sent to MQTT, validate that it is a real heating decision and not just a schema-only fallback.
+
+Minimum checks:
+
+- `factor` exists and is numeric
+- `confidence` exists and is numeric
+- `reason` exists and is a string
+- `global` is an object
+- `rooms` is an array
+
+If output validation fails:
+
+- log the root cause clearly
+- do not forward the payload to MQTT
+
+## Worker and path mapping
+
+Verify that the worker and forwarder scripts point to the real workspace path used by that OpenClaw instance.
+
+Example path variants:
+
+- `/root/.openclaw/workspace/scripts/...`
+- `/Volumes/appdata/openclaw/config/workspace/scripts/...`
+
+Do not assume one path layout.
+If the worker runs in a different runtime root than the stored workspace, a forwarding script can silently fail even when manual tests succeed.
+
+## Worker start and verification
+
+After wiring the forwarding layer, make sure the completion worker is actually running.
+
+Typical checks:
+
+```bash
+ps | grep openclaw-ha-completion-worker.py
+```
+
+If needed, restart it using your local runtime method.
+
+The important verification is not just HTTP 200 from the hook.
+The important verification is:
+
+1. a new hook request creates a run
+2. a finished decision JSON appears in run or session output
+3. the worker sees it
+4. the forwarder publishes it to MQTT
+5. Home Assistant receives the new `request_id`
+
+## Troubleshooting note
+
+If OpenClaw returns something like:
+
+- `global: null`
+- `rooms: {}`
+- `reason: payload only specified output schema and provided no heating telemetry`
+
+then the webhook runtime is still losing the real heating context before the agent sees it.
+That is not an MQTT issue.
+That is an input-wrapping issue between the hook request and the agent runtime.
+
+In that case, fix the runtime so the full heating payload is available to the agent as real input, not only as a text instruction about output schema.
+
 ## Home Assistant side expectation
 
 Home Assistant should consume the finished MQTT decision from:
