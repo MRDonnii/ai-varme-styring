@@ -2,6 +2,23 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.1
+
+Date: 2026-04-04
+
+### Fixed
+- **OpenClaw config flow dead-end**:
+  - OpenClaw can now be saved from the normal config flow when a valid `openclaw_url` is provided.
+  - The validation no longer requires hidden or non-exposed `openclaw_enabled` / bridge flags to pass.
+- **OpenClaw authentication flexibility**:
+  - the integration now accepts either `OpenClaw token` or `OpenClaw kode/password`
+  - token remains the preferred auth path when both are present
+
+### Changed
+- **OpenClaw setup UX**:
+  - the provider/options forms now expose both token and password-style credentials for OpenClaw webhook auth
+  - this makes first-time setup on a new machine consistent with the real form fields the user can enter
+
 ## v0.3.0
 
 Date: 2026-04-04

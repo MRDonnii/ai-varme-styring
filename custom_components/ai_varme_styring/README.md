@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Current version: 0.3.0**
+**Current version: 0.3.1**
 
 ## Highlights
 
@@ -24,6 +24,18 @@ The OpenClaw heating flow can now publish finished decisions to MQTT and let Hom
 - `homeassistant/ai_varme/openclaw/decision`
 
 This makes the decision chain easier to observe and more robust than instruction-wrapper style hooks.
+
+### 1b. OpenClaw auth and setup flow
+
+The OpenClaw setup flow now accepts a normal webhook URL directly when OpenClaw is used as the primary engine.
+You no longer have to hit a dead-end validation path that asked for hidden bridge or enable flags.
+
+Authentication can now use either:
+
+- `OpenClaw token`
+- `OpenClaw kode/password`
+
+If both are set, token is preferred.
 
 ### 2. Fixed room target ownership
 

@@ -68,6 +68,7 @@ from .const import (
     CONF_OPENCLAW_PAYLOAD_PROFILE,
     CONF_OPENCLAW_TIMEOUT_SEC,
     CONF_OPENCLAW_TOKEN,
+    CONF_OPENCLAW_PASSWORD,
     CONF_OPENCLAW_URL,
     CONF_PROVIDER_PAYLOAD_PROFILE,
     CONF_PID_DEADBAND_C,
@@ -2250,6 +2251,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             openclaw_bridge_url = str(cfg.get(CONF_OPENCLAW_BRIDGE_URL, DEFAULT_OPENCLAW_BRIDGE_URL)).strip()
             openclaw_url = str(cfg.get(CONF_OPENCLAW_URL, DEFAULT_OPENCLAW_URL)).strip()
             openclaw_token = str(cfg.get(CONF_OPENCLAW_TOKEN, "")).strip()
+            openclaw_password = str(cfg.get(CONF_OPENCLAW_PASSWORD, "")).strip()
             openclaw_timeout_sec = float(
                 cfg.get(CONF_OPENCLAW_TIMEOUT_SEC, DEFAULT_OPENCLAW_TIMEOUT_SEC)
             )
@@ -2268,6 +2270,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 bridge_env.get("OPENCLAW_TOKEN")
                 or os.getenv("OPENCLAW_TOKEN", "")
             ).strip()
+            env_openclaw_password = (
+                bridge_env.get("OPENCLAW_PASSWORD")
+                or os.getenv("OPENCLAW_PASSWORD", "")
+            ).strip()
             env_openclaw_timeout = (
                 bridge_env.get("OPENCLAW_TIMEOUT_SEC")
                 or os.getenv("OPENCLAW_TIMEOUT_SEC", "")
@@ -2281,6 +2287,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 openclaw_url = env_openclaw_url or "http://homeassistant.local:18789/hooks/agent"
             if not openclaw_token:
                 openclaw_token = env_openclaw_token
+            if not openclaw_password:
+                openclaw_password = env_openclaw_password
             if env_openclaw_timeout:
                 with contextlib.suppress(ValueError):
                     openclaw_timeout_sec = max(openclaw_timeout_sec, float(env_openclaw_timeout))
@@ -3022,6 +3030,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         openclaw_bridge_url=openclaw_bridge_url if use_openclaw_path else "",
                         openclaw_url=openclaw_url,
                         openclaw_token=openclaw_token,
+                        openclaw_password=openclaw_password,
                         openclaw_timeout_sec=openclaw_timeout_sec,
                         openclaw_model_preferred=openclaw_model_preferred,
                         openclaw_model_fallback=openclaw_model_fallback,

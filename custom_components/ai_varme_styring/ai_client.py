@@ -240,6 +240,7 @@ class AiProviderClient:
         openclaw_bridge_url: str = "",
         openclaw_url: str = "",
         openclaw_token: str = "",
+        openclaw_password: str = "",
         openclaw_timeout_sec: float = 12.0,
         openclaw_model_preferred: str = "",
         openclaw_model_fallback: str = "",
@@ -322,6 +323,7 @@ class AiProviderClient:
                     "bridge_url": openclaw_bridge_url,
                     "openclaw_url": openclaw_url,
                     "has_token": bool(str(openclaw_token).strip()),
+                    "has_password": bool(str(openclaw_password).strip()),
                     "model_preferred": str(openclaw_model_preferred).strip(),
                     "model_fallback": str(openclaw_model_fallback).strip(),
                     "queue_enabled": OPENCLAW_QUEUE_ENABLED,
@@ -370,6 +372,7 @@ class AiProviderClient:
                     text = await self._async_call_openclaw(
                         url=openclaw_url,
                         token=openclaw_token,
+                        password=openclaw_password,
                         prompt=_build_prompt(payload_openclaw, openclaw_request_id),
                         timeout_sec=float(openclaw_timeout_sec),
                         context_payload=payload_openclaw,
@@ -418,6 +421,7 @@ class AiProviderClient:
             text, meta = await self._async_call_openclaw_with_session(
                 url=openclaw_url,
                 token=openclaw_token,
+                password=openclaw_password,
                 prompt=_build_prompt(payload_openclaw, request_id),
                 timeout_sec=float(openclaw_timeout_sec),
                 request_id=request_id,
@@ -583,11 +587,21 @@ class AiProviderClient:
                 return ""
             return str(parts[0].get("text", "")).strip()
 
+    def _openclaw_headers(self, *, token: str = "", password: str = "") -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        credential = str(token).strip() or str(password).strip()
+        if credential:
+            headers["Authorization"] = f"Bearer {credential}"
+        if (not str(token).strip()) and str(password).strip():
+            headers["X-OpenClaw-Password"] = str(password).strip()
+        return headers
+
     async def _async_call_openclaw(
         self,
         *,
         url: str,
         token: str,
+        password: str,
         prompt: str,
         timeout_sec: float,
         context_payload: dict[str, Any] | None = None,
@@ -595,9 +609,7 @@ class AiProviderClient:
     ) -> str:
         """Call OpenClaw webhook endpoint and normalize text output for JSON parsing."""
         session = async_get_clientsession(self.hass)
-        headers = {"Content-Type": "application/json"}
-        if str(token).strip():
-            headers["Authorization"] = f"Bearer {token.strip()}"
+        headers = self._openclaw_headers(token=token, password=password)
         payload: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
         payload.setdefault("type", "heating_decision")
         if request_id:
@@ -651,9 +663,7 @@ class AiProviderClient:
         """Call OpenClaw and poll local session files for the final JSON output."""
         normalized_url = self._normalize_openclaw_url(url)
         session = async_get_clientsession(self.hass)
-        headers = {"Content-Type": "application/json"}
-        if str(token).strip():
-            headers["Authorization"] = f"Bearer {token.strip()}"
+        headers = self._openclaw_headers(token=token, password=password)
         body: dict[str, Any] = dict(context_payload) if isinstance(context_payload, dict) else {}
         body.setdefault("type", "heating_decision")
         body.setdefault("request_id", request_id)
@@ -820,6 +830,7 @@ class AiProviderClient:
         *,
         url: str,
         token: str,
+        password: str,
         payload: dict[str, Any],
         ollama_endpoint: str,
         ollama_model: str,
@@ -829,9 +840,7 @@ class AiProviderClient:
     ) -> tuple[str, str, dict[str, Any]]:
         """Call a synchronous local decision bridge that returns decision JSON."""
         session = async_get_clientsession(self.hass)
-        headers = {"Content-Type": "application/json"}
-        if str(token).strip():
-            headers["Authorization"] = f"Bearer {token.strip()}"
+        headers = self._openclaw_headers(token=token, password=password)
         body = {
             "context": payload,
             "model": {

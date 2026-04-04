@@ -53,6 +53,7 @@ from .const import (
     CONF_OPENCLAW_PAYLOAD_PROFILE,
     CONF_OPENCLAW_TIMEOUT_SEC,
     CONF_OPENCLAW_TOKEN,
+    CONF_OPENCLAW_PASSWORD,
     CONF_OPENCLAW_URL,
     CONF_OLLAMA_HOST,
     CONF_OUTDOOR_TEMP_SENSOR,
@@ -128,6 +129,7 @@ from .const import (
     DEFAULT_OPENCLAW_PAYLOAD_PROFILE,
     DEFAULT_OPENCLAW_TIMEOUT_SEC,
     DEFAULT_OPENCLAW_TOKEN,
+    DEFAULT_OPENCLAW_PASSWORD,
     DEFAULT_OPENCLAW_URL,
     DEFAULT_OLLAMA_HOST,
     DEFAULT_PID_DEADBAND_C,
@@ -476,6 +478,12 @@ def _base_schema(defaults: dict[str, Any]) -> vol.Schema:
             selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
         )
         schema[vol.Optional(
+            CONF_OPENCLAW_PASSWORD,
+            default=defaults.get(CONF_OPENCLAW_PASSWORD, DEFAULT_OPENCLAW_PASSWORD),
+        )] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+        )
+        schema[vol.Optional(
             CONF_OPENCLAW_MODEL_PREFERRED,
             default=defaults.get(CONF_OPENCLAW_MODEL_PREFERRED, DEFAULT_OPENCLAW_MODEL_PREFERRED),
         )] = selector.SelectSelector(
@@ -785,6 +793,12 @@ def _providers_schema(defaults: dict[str, Any]) -> vol.Schema:
             selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
         )
         schema[vol.Optional(
+            CONF_OPENCLAW_PASSWORD,
+            default=defaults.get(CONF_OPENCLAW_PASSWORD, DEFAULT_OPENCLAW_PASSWORD),
+        )] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+        )
+        schema[vol.Optional(
             CONF_OPENCLAW_MODEL_PREFERRED,
             default=defaults.get(CONF_OPENCLAW_MODEL_PREFERRED, DEFAULT_OPENCLAW_MODEL_PREFERRED),
         )] = selector.SelectSelector(
@@ -946,7 +960,8 @@ def _validate_provider_input(user_input: dict[str, Any]) -> dict[str, str]:
 
     if primary_engine == AI_PRIMARY_ENGINE_OPENCLAW:
         bridge = str(user_input.get(CONF_OPENCLAW_BRIDGE_URL, "")).strip()
-        if not bridge and not bool(user_input.get(CONF_OPENCLAW_ENABLED, DEFAULT_OPENCLAW_ENABLED)):
+        hook_url = str(user_input.get(CONF_OPENCLAW_URL, "")).strip()
+        if not bridge and not hook_url:
             errors["base"] = "openclaw_bridge_or_hook_required"
             return errors
     if primary_engine not in AI_DECISION_ENGINE_OPTIONS and primary_engine not in AI_PRIMARY_ENGINE_OPTIONS:
