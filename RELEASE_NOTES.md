@@ -1,8 +1,9 @@
-Release v0.3.4 - Room occupancy stale-state fix
+Release v0.3.5 - Presence wording removed from AI decisions
 
-This hotfix resolves a stale occupancy fallback issue in AI Varme Styring.
+This hotfix removes the remaining occupancy signals from AI decision payloads and prompt schema.
 
 Included changes:
-- Rooms without configured occupancy sensors no longer reuse an old `last_occupancy_active` value.
-- Occupancy fallback is now only used when occupancy sensors are configured but temporarily unavailable.
-- Removing a presence sensor from a room now clears the old occupancy signal instead of keeping stale occupied or unoccupied state in runtime.
+- Removed room occupancy fields from OpenClaw heating payloads.
+- Removed occupancy from compact provider decision payloads.
+- Removed `occupied_rooms` from the OpenClaw output schema prompt.
+- AI reasons should no longer explain no-action with `not occupied` or `ikke beboet`.

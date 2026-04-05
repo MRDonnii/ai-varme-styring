@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Current version: 0.3.4**
+**Current version: 0.3.5**
 
 ## Highlights
 
