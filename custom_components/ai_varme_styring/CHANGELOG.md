@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.9
+
+Date: 2026-04-05
+
+### Fixed
+- **Garage heat-start responsiveness**:
+  - garage rooms now use lower default heat-pump start thresholds so small deficits like 21.8 -> 22.0 are no longer ignored
+  - existing installations that still carry the old default `0.4` garage thresholds are migrated at runtime to the new garage-specific defaults
+  - the room editor now also shows the lower garage defaults for new or edited garage rooms
+
 ## v0.3.8
 
 Date: 2026-04-05

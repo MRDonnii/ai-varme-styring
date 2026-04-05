@@ -123,6 +123,8 @@ from .const import (
     DEFAULT_DECIMALS,
     DEFAULT_ENABLE_LEARNING,
     DEFAULT_FLOW_LIMIT_MARGIN_C,
+    DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C,
+    DEFAULT_GARAGE_ROOM_START_DEFICIT_C,
     DEFAULT_HUMIDITY_COMFORT_ENABLED,
     DEFAULT_HUMIDITY_DRY_THRESHOLD,
     DEFAULT_HUMIDITY_HUMID_THRESHOLD,
@@ -2634,6 +2636,29 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ", ".join(active_heat_names) if active_heat_names else "Ingen aktiv varmekilde"
                 )
             
+                room_name_l = str(name or "").strip().lower()
+                garage_room = "garage" in room_name_l or "garagen" in room_name_l
+                configured_quick_start = room_cfg.get(CONF_ROOM_QUICK_START_DEFICIT_C)
+                if garage_room and configured_quick_start is not None and float(configured_quick_start) == DEFAULT_ROOM_QUICK_START_DEFICIT_C:
+                    quick_start_deficit_c = DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C
+                else:
+                    quick_start_deficit_c = float(
+                        configured_quick_start
+                        if configured_quick_start is not None
+                        else (DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C if garage_room else DEFAULT_ROOM_QUICK_START_DEFICIT_C)
+                    )
+
+                configured_start_deficit = room_cfg.get(CONF_ROOM_START_DEFICIT_C)
+                base_start_deficit = cfg.get(CONF_START_DEFICIT_C, DEFAULT_ROOM_START_DEFICIT_C)
+                if garage_room and configured_start_deficit is not None and float(configured_start_deficit) == DEFAULT_ROOM_START_DEFICIT_C:
+                    start_deficit_c = DEFAULT_GARAGE_ROOM_START_DEFICIT_C
+                else:
+                    start_deficit_c = float(
+                        configured_start_deficit
+                        if configured_start_deficit is not None
+                        else (DEFAULT_GARAGE_ROOM_START_DEFICIT_C if garage_room else base_start_deficit)
+                    )
+
                 rooms.append(
                     RoomSnapshot(
                         name=name,
@@ -2671,15 +2696,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         anti_short_cycle_min=float(
                             room_cfg.get(CONF_ROOM_ANTI_SHORT_CYCLE_MIN, DEFAULT_ROOM_ANTI_SHORT_CYCLE_MIN)
                         ),
-                        quick_start_deficit_c=float(
-                            room_cfg.get(CONF_ROOM_QUICK_START_DEFICIT_C, DEFAULT_ROOM_QUICK_START_DEFICIT_C)
-                        ),
-                        start_deficit_c=float(
-                            room_cfg.get(
-                                CONF_ROOM_START_DEFICIT_C,
-                                cfg.get(CONF_START_DEFICIT_C, DEFAULT_ROOM_START_DEFICIT_C),
-                            )
-                        ),
+                        quick_start_deficit_c=quick_start_deficit_c,
+                        start_deficit_c=start_deficit_c,
                         stop_surplus_c=float(
                             room_cfg.get(
                                 CONF_ROOM_STOP_SURPLUS_C,
