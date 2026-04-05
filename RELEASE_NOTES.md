@@ -1,9 +1,10 @@
-Release v0.3.10 - Room target helper auto-ensure
+Release v0.3.11 - Full helper self-heal for room control
 
-This hotfix makes fresh installations and migrated setups more robust by ensuring room target helpers are linked and usable.
+This release hardens setup and runtime so required room target helpers are repaired automatically.
 
 Included changes:
-- The integration now validates room target helper links during setup.
-- Missing helper links are repaired by resolving existing matching input_number entities.
-- If no match exists and Home Assistant exposes `input_number.create`, a target helper is created automatically.
-- Updated helper links are persisted to config entry options to survive restart.
+- Room setup and room options now always ensure `room_target_number`, even without selected area.
+- Missing room target helpers are resolved from existing `input_number` entities when possible.
+- If no match exists and Home Assistant supports `input_number.create`, helpers are created automatically.
+- Coordinator now performs periodic runtime self-heal and persists repaired helper links to options.
+- Runtime helper repair events are logged to `openclaw_services_ensure.log` for easier diagnostics.

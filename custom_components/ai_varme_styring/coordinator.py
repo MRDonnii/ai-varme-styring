@@ -204,6 +204,16 @@ OPENCLAW_SERVICES_ENSURE_LOG = OPENCLAW_RUNTIME_TMP_DIR / "openclaw_services_ens
 _OPENCLAW_BRIDGE_ENV_FILE = "/config/custom_components/ai_varme_styring/runtime/systemd/openclaw-decision-bridge.env"
 
 
+def _write_services_ensure_log(stage: str, **payload: object) -> None:
+    try:
+        row = {"stage": stage, **payload}
+        OPENCLAW_SERVICES_ENSURE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with OPENCLAW_SERVICES_ENSURE_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def _load_openclaw_bridge_env() -> dict[str, str]:
     """Load KEY=VALUE pairs from the bridge env file when present."""
     data: dict[str, str] = {}
@@ -1047,6 +1057,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._manual_full_report_requested: bool = False
         self._bridge_stats: dict[str, Any] = {}
         self._last_bridge_stats_update: float | None = None
+        self._last_room_helper_selfheal_ts: float | None = None
         self._analytics_samples: list[dict[str, Any]] = []
         self._manual_baseline: dict[str, dict[str, Any]] = {}
         self._last_valid_prices: dict[str, float] = {}
@@ -1195,6 +1206,86 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if migrated_runtime:
             await self._async_save_runtime()
+
+    async def _async_selfheal_room_target_helpers(
+        self, rooms_cfg: list[dict[str, Any]], now_ts: float
+    ) -> list[dict[str, Any]]:
+        """Ensure each room has a valid target helper entity linked."""
+        if _minutes_since(self._last_room_helper_selfheal_ts, now_ts) < 5.0:
+            return rooms_cfg
+        self._last_room_helper_selfheal_ts = now_ts
+
+        changed = False
+        updated_rooms: list[dict[str, Any]] = []
+
+        for room_cfg in rooms_cfg:
+            if not isinstance(room_cfg, dict):
+                continue
+
+            room_copy = dict(room_cfg)
+            room_name = str(room_copy.get(CONF_ROOM_NAME, "") or "").strip()
+            if not room_name:
+                updated_rooms.append(room_copy)
+                continue
+
+            configured_target = str(room_copy.get(CONF_ROOM_TARGET_NUMBER, "") or "").strip()
+            resolved_target = _resolve_room_target_number_entity(self.hass, room_name, configured_target)
+
+            if (not resolved_target) and self.hass.services.has_service("input_number", "create"):
+                try:
+                    await self.hass.services.async_call(
+                        "input_number",
+                        "create",
+                        {
+                            "name": f"AI Varme {room_name} target",
+                            "min": 10.0,
+                            "max": 30.0,
+                            "step": 0.5,
+                            "mode": "box",
+                            "icon": "mdi:target",
+                        },
+                        blocking=True,
+                    )
+                except Exception as err:  # noqa: BLE001
+                    _write_services_ensure_log(
+                        "room_helper_create_failed",
+                        entry_id=self.entry.entry_id,
+                        room=room_name,
+                        error=str(err),
+                    )
+                resolved_target = _resolve_room_target_number_entity(self.hass, room_name, configured_target)
+
+            if resolved_target and resolved_target != configured_target:
+                room_copy[CONF_ROOM_TARGET_NUMBER] = resolved_target
+                changed = True
+                _write_services_ensure_log(
+                    "room_helper_linked",
+                    entry_id=self.entry.entry_id,
+                    room=room_name,
+                    helper=resolved_target,
+                    previous=configured_target or None,
+                )
+            elif not resolved_target:
+                _write_services_ensure_log(
+                    "room_helper_missing",
+                    entry_id=self.entry.entry_id,
+                    room=room_name,
+                )
+
+            updated_rooms.append(room_copy)
+
+        if changed:
+            new_options = dict(self.entry.options)
+            new_options[CONF_ROOMS] = updated_rooms
+            self.hass.config_entries.async_update_entry(self.entry, options=new_options)
+            _write_services_ensure_log(
+                "room_helpers_options_updated",
+                entry_id=self.entry.entry_id,
+                room_count=len(updated_rooms),
+            )
+            return updated_rooms
+
+        return rooms_cfg
 
     async def _async_save_runtime(self) -> None:
         await self._store.async_save(
@@ -2396,6 +2487,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             
             rooms_cfg: list[dict[str, Any]] = list(cfg.get(CONF_ROOMS, []))
+            rooms_cfg = await self._async_selfheal_room_target_helpers(rooms_cfg, now_ts)
             occupancy_global = False
             for room_cfg in rooms_cfg:
                 for sensor in room_cfg.get(CONF_ROOM_OCCUPANCY_SENSORS, []):
