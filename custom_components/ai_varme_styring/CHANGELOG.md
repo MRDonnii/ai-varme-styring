@@ -2,6 +2,17 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.10
+
+Date: 2026-04-05
+
+### Fixed
+- **Room target helpers are now ensured at setup**:
+  - on startup the integration now validates each room target helper link
+  - if a linked helper is missing, it first resolves existing matching input_number entities
+  - if no match exists and `input_number.create` is available, it creates a helper automatically
+  - resolved/created helper links are persisted back to entry options so room controls keep working after restart
+
 ## v0.3.9
 
 Date: 2026-04-05
