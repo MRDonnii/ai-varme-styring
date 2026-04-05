@@ -1,7 +1,7 @@
 {
   "domain": "ai_varme_styring",
   "name": "AI Varme Styring",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "icon": "mdi:thermostat",
   "documentation": "https://github.com/MRDonnii/ai-varme-styring",
   "requirements": [],
