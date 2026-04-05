@@ -2,6 +2,18 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.12
+
+Date: 2026-04-05
+
+### Fixed
+- **Runtime stability for existing room state migrations**:
+  - room runtime state now backfills missing control keys on each cycle
+  - this prevents KeyError cases like `'closed_since'` on upgraded installations with older runtime state
+- **More tolerant target-helper matching**:
+  - helper resolvers now also accept plain `input_number.<room_slug>` entities
+  - rooms with helpers like `input_number.kokken` can now auto-link without requiring `_target` naming
+
 ## v0.3.11
 
 Date: 2026-04-05

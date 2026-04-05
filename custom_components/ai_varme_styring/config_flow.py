@@ -211,6 +211,7 @@ def _find_target_helper_entity(hass, room_name: str) -> str:
         f"input_number.thermostat_{slug}_target",
         f"input_number.{slug}_temperature_target",
         f"input_number.ai_varme_target_{slug}",
+        f"input_number.{slug}",
     ]
     for entity_id in preferred:
         if hass.states.get(entity_id) is not None:

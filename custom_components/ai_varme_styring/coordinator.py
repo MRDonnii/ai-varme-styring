@@ -791,6 +791,7 @@ def _resolve_room_target_number_entity(
                 f"input_number.thermostat_{slug}_target",
                 f"input_number.{slug}_temperature_target",
                 f"input_number.ai_varme_target_{slug}",
+                f"input_number.{slug}",
             ]
         )
 
@@ -3405,32 +3406,32 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if not room.room_enabled:
                             actions.append(f"{room.name}: AI rumstyring er slået fra")
                             continue
-                        rt = self._room_runtime.setdefault(
-                            room.name,
-                            {
-                                "open_since": None,
-                                "closed_since": None,
-                                "paused_by_open": False,
-                                "last_hvac_mode": "heat",
-                                "last_switch": None,
-                                "overheat_since": None,
-                                "pid_integral": 0.0,
-                                "pid_last_error": None,
-                                "pid_last_ts": None,
-                                "learn_hot_hits": 0,
-                                "learn_cold_hits": 0,
-                                "learn_start_offset": 0.0,
-                                "learn_stop_offset": 0.0,
-                                "room_empty_since": None,
-                                "room_occupied_since": None,
-                                "eco_active": False,
-                                "eco_comfort_target": None,
-                                "eco_prev_radiator_target": None,
-                                "eco_last_change": None,
-                                "heat_hold_until": None,
-                                "stop_candidate_since": None,
-                            },
-                        )
+                        room_rt_defaults = {
+                            "open_since": None,
+                            "closed_since": None,
+                            "paused_by_open": False,
+                            "last_hvac_mode": "heat",
+                            "last_switch": None,
+                            "overheat_since": None,
+                            "pid_integral": 0.0,
+                            "pid_last_error": None,
+                            "pid_last_ts": None,
+                            "learn_hot_hits": 0,
+                            "learn_cold_hits": 0,
+                            "learn_start_offset": 0.0,
+                            "learn_stop_offset": 0.0,
+                            "room_empty_since": None,
+                            "room_occupied_since": None,
+                            "eco_active": False,
+                            "eco_comfort_target": None,
+                            "eco_prev_radiator_target": None,
+                            "eco_last_change": None,
+                            "heat_hold_until": None,
+                            "stop_candidate_since": None,
+                        }
+                        rt = self._room_runtime.setdefault(room.name, dict(room_rt_defaults))
+                        for key, value in room_rt_defaults.items():
+                            rt.setdefault(key, value)
             
                         eco_room_enabled = bool(presence_eco_enabled and room.presence_eco_enabled)
                         room_occupied_now = bool(room.occupancy_active and not vacuum_running)
