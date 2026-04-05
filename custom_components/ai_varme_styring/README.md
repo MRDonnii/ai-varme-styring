@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Current version: 0.3.2**
+**Current version: 0.3.3**
 
 ## Highlights
 
@@ -43,6 +43,11 @@ OpenClaw webhook requests now duplicate the heating payload as top-level fields 
 This makes new OpenClaw instances more robust when their runtime wrapper expects the heating telemetry in a specific location.
 
 Malformed OpenClaw outputs are also rejected earlier if `global`, `rooms`, `diagnostics`, or `input_summary` come back in the wrong shape.
+
+### 1d. Presence only for ECO mode
+
+Presence and occupancy are now reserved for ECO behavior only.
+They no longer bias OpenClaw room priority, comfort reasoning, or normal heating decisions outside ECO mode.
 
 ### 2. Fixed room target ownership
 

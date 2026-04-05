@@ -606,14 +606,11 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
         comfort_band = str(room.get("comfort_band") or "").strip()
         humidity = _safe_float(room.get("humidity"))
         opening_active = bool(room.get("opening_active"))
-        occupancy_active = bool(room.get("occupancy_active"))
         comfort_reason = "Komfortmode er slukket."
         heat_need_source = "temperatur"
         if comfort_mode_active:
             if opening_active:
                 comfort_reason = "Komfort ignoreres midlertidigt, fordi rummet er sat på pause pga. åbning."
-            elif not occupancy_active:
-                comfort_reason = "Komfort ignoreres, fordi rummet ikke er aktivt optaget lige nu."
             elif comfort_gap > deficit + 0.05:
                 heat_need_source = "komfort"
                 if humidity is not None and comfort_band == "tør":

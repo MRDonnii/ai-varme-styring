@@ -1,8 +1,9 @@
-Release v0.3.2 - OpenClaw hook payload compatibility
+Release v0.3.3 - Presence limited to ECO mode
 
-This release hardens the OpenClaw heating path for new instances that were accepting the webhook call but dropping the actual room telemetry in runtime.
+This release tightens the heating logic so presence and occupancy only affect ECO behavior.
 
 Included changes:
-- The integration now sends the heating payload as top-level fields and as nested `context`, `input`, and `heating_context` objects.
-- Malformed OpenClaw outputs are rejected earlier when `global`, `rooms`, `diagnostics`, or `input_summary` are returned with the wrong shape.
-- The direct session path now consistently supports password auth as well as token auth.
+- Room occupancy is no longer used as a normal heating-demand signal in OpenClaw room decisions.
+- Room priority is no longer raised just because a room is occupied.
+- Comfort reasoning outside ECO mode no longer depends on occupancy.
+- This prevents misleading AI reasons such as a room being slightly under target but dismissed only because it is not occupied.
