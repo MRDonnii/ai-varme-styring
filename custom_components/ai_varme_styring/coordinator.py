@@ -2486,12 +2486,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         room_rt["room_occupancy_last_change"] = now_ts
                     room_rt["last_occupancy_active"] = bool(occupancy_active)
                     room_rt["occupancy_source_fallback"] = False
-                else:
-                    # If all occupancy sensors are unavailable, keep last known state.
+                elif occupancy_sensor_ids:
+                    # If configured occupancy sensors are temporarily unavailable, keep last known state.
                     occupancy_active = bool(room_rt.get("last_occupancy_active", False))
                     room_rt["occupancy_source_fallback"] = True
                     if room_rt.get("room_occupancy_last_change") is None:
                         room_rt["room_occupancy_last_change"] = now_ts
+                else:
+                    # No occupancy sensors configured for this room. Presence should only affect ECO mode,
+                    # so remove stale occupancy state instead of carrying an old value forward.
+                    occupancy_active = False
+                    room_rt["last_occupancy_active"] = False
+                    room_rt["occupancy_source_fallback"] = False
+                    room_rt["room_occupancy_last_change"] = None
             
                 room_rt["occupancy_unavailable_sensors"] = occupancy_unavailable
                 room_enabled = bool(room_rt.get("room_enabled_override", True))

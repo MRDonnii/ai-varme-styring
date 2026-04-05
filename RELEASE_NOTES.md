@@ -1,9 +1,8 @@
-Release v0.3.3 - Presence limited to ECO mode
+Release v0.3.4 - Room occupancy stale-state fix
 
-This release tightens the heating logic so presence and occupancy only affect ECO behavior.
+This hotfix resolves a stale occupancy fallback issue in AI Varme Styring.
 
 Included changes:
-- Room occupancy is no longer used as a normal heating-demand signal in OpenClaw room decisions.
-- Room priority is no longer raised just because a room is occupied.
-- Comfort reasoning outside ECO mode no longer depends on occupancy.
-- This prevents misleading AI reasons such as a room being slightly under target but dismissed only because it is not occupied.
+- Rooms without configured occupancy sensors no longer reuse an old `last_occupancy_active` value.
+- Occupancy fallback is now only used when occupancy sensors are configured but temporarily unavailable.
+- Removing a presence sensor from a room now clears the old occupancy signal instead of keeping stale occupied or unoccupied state in runtime.

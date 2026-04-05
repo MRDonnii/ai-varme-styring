@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.4
+
+Date: 2026-04-05
+
+### Fixed
+- **Stale room occupancy fallback**:
+  - rooms without configured occupancy sensors no longer inherit an old `last_occupancy_active` value
+  - occupancy fallback is now only used when sensors are configured but temporarily unavailable
+  - removing a presence sensor from a room now clears the old occupancy signal instead of keeping the room marked as unoccupied or occupied
+
 ## v0.3.3
 
 Date: 2026-04-05
