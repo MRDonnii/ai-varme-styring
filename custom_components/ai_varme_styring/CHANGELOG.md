@@ -2,6 +2,18 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.11
+
+Date: 2026-04-05
+
+### Fixed
+- **Full room-target helper self-heal across setup, options and runtime**:
+  - room forms now ensure a valid `room_target_number` even when no area is selected
+  - options room add/edit now auto-resolve or auto-create the target helper the same way as first-time setup
+  - coordinator now runs periodic runtime self-heal to relink missing room target helpers
+  - when runtime repairs links, updated room helper mappings are persisted back to entry options automatically
+  - helper self-heal writes operational trace rows to `openclaw_services_ensure.log` for troubleshooting
+
 ## v0.3.10
 
 Date: 2026-04-05

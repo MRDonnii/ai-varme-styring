@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -196,6 +197,74 @@ OPENCLAW_MODEL_OPTIONS = [
     "gpt-5.4-mini",
     "grok-code-fast-1",
 ]
+
+def _room_slug(room_name: str) -> str:
+    normalized = str(room_name or "").lower()
+    normalized = normalized.replace("\u00e6", "ae").replace("\u00f8", "oe").replace("\u00e5", "aa")
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    return normalized or "rum"
+
+
+def _find_target_helper_entity(hass, room_name: str) -> str:
+    slug = _room_slug(room_name)
+    preferred = [
+        f"input_number.thermostat_{slug}_target",
+        f"input_number.{slug}_temperature_target",
+        f"input_number.ai_varme_target_{slug}",
+    ]
+    for entity_id in preferred:
+        if hass.states.get(entity_id) is not None:
+            return entity_id
+
+    for st in hass.states.async_all("input_number"):
+        eid = str(getattr(st, "entity_id", "") or "").lower()
+        if slug in eid and ("target" in eid or "temperature" in eid or "temp" in eid):
+            return st.entity_id
+    return ""
+
+
+async def _ensure_room_target_helper_entity(hass, room_input: dict[str, Any]) -> dict[str, Any]:
+    room_name = str(room_input.get(CONF_ROOM_NAME, "") or "").strip()
+    if not room_name:
+        return room_input
+
+    current_target = str(room_input.get(CONF_ROOM_TARGET_NUMBER, "") or "").strip()
+    if current_target and hass.states.get(current_target) is not None:
+        return room_input
+
+    resolved = _find_target_helper_entity(hass, room_name)
+    if not resolved and hass.services.has_service("input_number", "create"):
+        before = {st.entity_id for st in hass.states.async_all("input_number")}
+        try:
+            await hass.services.async_call(
+                "input_number",
+                "create",
+                {
+                    "name": f"AI Varme {room_name} target",
+                    "min": 10.0,
+                    "max": 30.0,
+                    "step": 0.5,
+                    "mode": "box",
+                    "icon": "mdi:target",
+                },
+                blocking=True,
+            )
+        except Exception:
+            pass
+
+        after = {st.entity_id for st in hass.states.async_all("input_number")}
+        created = sorted(after - before)
+        if created:
+            slug = _room_slug(room_name)
+            resolved = next((eid for eid in created if slug in eid.lower()), created[0])
+        else:
+            resolved = _find_target_helper_entity(hass, room_name)
+
+    if resolved:
+        room_input[CONF_ROOM_TARGET_NUMBER] = resolved
+
+    return room_input
+
 
 def _entity_selector(domain: str, multiple: bool = False) -> selector.EntitySelector:
     return selector.EntitySelector(
@@ -1075,7 +1144,7 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Auto-fill room fields from selected HA area when possible."""
         area_id = room_input.get(CONF_ROOM_AREA_ID)
         if not area_id:
-            return room_input
+            return await _ensure_room_target_helper_entity(self.hass, room_input)
 
         entity_reg = er.async_get(self.hass)
         area_reg = ar.async_get(self.hass)
@@ -1143,6 +1212,7 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "binary_sensor", ("motion", "presence", "occupancy", "bevag", "bevæg", "tilstede")
             )
 
+        room_input = await _ensure_room_target_helper_entity(self.hass, room_input)
         return room_input
 
     @staticmethod
@@ -1352,7 +1422,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
         """Auto-fill room fields from selected HA area when possible."""
         area_id = room_input.get(CONF_ROOM_AREA_ID)
         if not area_id:
-            return room_input
+            return await _ensure_room_target_helper_entity(self.hass, room_input)
 
         entity_reg = er.async_get(self.hass)
         area_reg = ar.async_get(self.hass)
@@ -1408,4 +1478,5 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             room_input[CONF_ROOM_OCCUPANCY_SENSORS] = many(
                 "binary_sensor", ("motion", "presence", "occupancy", "bevag", "bevæg", "tilstede")
             )
+        room_input = await _ensure_room_target_helper_entity(self.hass, room_input)
         return room_input
