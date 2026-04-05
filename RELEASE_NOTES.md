@@ -1,9 +1,8 @@
-Release v0.3.8 - Report metadata and field hydration
+Release v0.3.9 - Garage heat-start responsiveness
 
-This release makes the AI report sensor much more robust for dashboards and release display.
+This hotfix makes Garage react sooner when it is slightly below target.
 
 Included changes:
-- The report sensor now exposes the current integration version and current changelog section as structured release metadata.
-- Report fields such as cheapest heat source, flow-limited, diagnostics, and room decisions now derive from structured decision/context data with sensible fallbacks.
-- Added backward-compatible attribute aliases so older dashboard cards can keep rendering the same facts while newer cards can use the cleaner keys.
-- Cleaned remaining mojibake-prone report labels so Danish text stays stable.
+- Garage rooms now use lower default heat-pump start thresholds so small deficits like 21.8 to 22.0 are not held back by the old 0.4?C defaults.
+- Existing installations that still carry the old default garage thresholds are migrated automatically at runtime.
+- The room editor now shows the lower garage defaults for new or edited garage rooms.
