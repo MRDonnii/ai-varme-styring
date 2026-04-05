@@ -645,9 +645,7 @@ def _build_openclaw_heating_payload(
                 last_heating_change_minutes = 0
 
             room_priority = "medium"
-            if bool(room.get("occupancy_active")):
-                room_priority = "high"
-            elif not bool(room.get("room_enabled", True)):
+            if not bool(room.get("room_enabled", True)):
                 room_priority = "low"
 
             normalized_rooms.append(
@@ -659,7 +657,7 @@ def _build_openclaw_heating_payload(
                     "hvac_action": hvac_action,
                     "temp_trend_15m": 0.0,
                     "humidity": float(room.get("humidity") or 0.0),
-                    "occupied": bool(room.get("occupancy_active")),
+                    "occupied": False,
                     "window_open": bool(room.get("opening_active")),
                     "last_heating_change_minutes": last_heating_change_minutes,
                     "valve_open_percent": 100.0 if bool(room.get("is_heating_now")) else 0.0,
@@ -3472,7 +3470,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             comfort_mode_enabled
                             and room.room_enabled
                             and not room.opening_active
-                            and room.occupancy_active
                             and comfort_gap_extra >= 0.05
                         )
                         if comfort_bias_active:

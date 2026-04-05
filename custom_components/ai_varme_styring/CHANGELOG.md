@@ -2,6 +2,21 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.3
+
+Date: 2026-04-05
+
+### Changed
+- **Presence only affects ECO mode**:
+  - room occupancy is no longer sent as a real heating-demand signal to OpenClaw room decisions
+  - room priority is no longer raised because a room is occupied
+  - comfort bias outside ECO mode no longer depends on room occupancy
+
+### Fixed
+- **Misleading AI reasons about non-occupied rooms**:
+  - small deficits are no longer dismissed just because a room is marked as not occupied
+  - this prevents explanations like `not occupied, no heating needed now` from being caused by presence outside ECO mode
+
 ## v0.3.2
 
 Date: 2026-04-04
