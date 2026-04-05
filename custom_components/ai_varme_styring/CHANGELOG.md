@@ -2,6 +2,17 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.8
+
+Date: 2026-04-05
+
+### Fixed
+- **AI report metadata and field hydration**:
+  - the report sensor now exposes the current integration version and current changelog section as structured release fields
+  - report fields such as cheapest heat source, flow-limited, diagnostics, and room decisions now fall back to structured decision/context data before showing empty placeholders
+  - added backward-compatible report attribute aliases so existing dashboards can read the same facts without brittle key mismatches
+  - cleaned remaining report-sensor mojibake-prone labels so Danish text stays stable in runtime
+
 ## v0.3.7
 
 Date: 2026-04-05

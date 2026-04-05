@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
@@ -301,6 +304,180 @@ def _format_report_long(
 
     return "\n\n".join(section for section in sections if section).strip() or long_text
 
+
+
+
+@lru_cache(maxsize=1)
+def _integration_release_info() -> dict[str, str]:
+    base = Path(__file__).resolve().parent
+    version = "Ukendt"
+    notes = "Ingen release notes fundet."
+    try:
+        manifest = json.loads((base / "manifest.json").read_text(encoding="utf-8"))
+        version = str(manifest.get("version") or "Ukendt")
+    except Exception:
+        pass
+    try:
+        lines = (base / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+        capture: list[str] = []
+        active = False
+        for line in lines:
+            if line.startswith("## "):
+                if active:
+                    break
+                if line.strip().lower() == f"## v{version}".lower():
+                    active = True
+            if active:
+                capture.append(line)
+        if capture:
+            notes = "\n".join(capture).strip()
+    except Exception:
+        pass
+    return {"version": version, "notes": notes}
+
+def _decision_block(data: dict[str, Any]) -> dict[str, Any]:
+    decision = data.get("ai_structured_decision", {})
+    return decision if isinstance(decision, dict) else {}
+
+
+def _decision_context(data: dict[str, Any]) -> dict[str, Any]:
+    ctx = _decision_block(data).get("context", {})
+    return ctx if isinstance(ctx, dict) else {}
+
+
+def _decision_diagnostics(data: dict[str, Any]) -> dict[str, Any]:
+    diag = _decision_block(data).get("diagnostics", {})
+    return diag if isinstance(diag, dict) else {}
+
+
+def _list_text(values: Any) -> str:
+    if not isinstance(values, list):
+        return "Ingen"
+    cleaned = [str(v).strip() for v in values if str(v).strip()]
+    return ", ".join(cleaned) if cleaned else "Ingen"
+
+
+def _bool_text(value: Any, *, unknown: str = "Ukendt") -> str:
+    if isinstance(value, bool):
+        return "Ja" if value else "Nej"
+    return unknown
+
+
+def _derived_room_names(data: dict[str, Any], predicate) -> list[str]:
+    rooms = data.get("rooms", []) if isinstance(data.get("rooms"), list) else []
+    names: list[str] = []
+    for room in rooms:
+        if not isinstance(room, dict):
+            continue
+        try:
+            if predicate(room):
+                name = str(room.get("name", "")).strip()
+                if name:
+                    names.append(name)
+        except Exception:
+            continue
+    return names
+
+
+def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
+    decision = _decision_block(data)
+    context = _decision_context(data)
+    diagnostics = _decision_diagnostics(data)
+    global_block = decision.get("global", {}) if isinstance(decision.get("global"), dict) else {}
+    rooms = decision.get("rooms", []) if isinstance(decision.get("rooms"), list) else []
+    meta = _openclaw_meta(data)
+
+    active_heating_rooms = diagnostics.get("active_heating_rooms")
+    if not isinstance(active_heating_rooms, list) or not active_heating_rooms:
+        active_heating_rooms = _derived_room_names(data, lambda room: bool(room.get("is_heating_now")))
+
+    near_target_rooms = diagnostics.get("near_target_rooms")
+    if not isinstance(near_target_rooms, list) or not near_target_rooms:
+        near_target_rooms = _derived_room_names(
+            data,
+            lambda room: abs(float(room.get("deficit") or 0.0)) <= 0.05 and abs(float(room.get("surplus") or 0.0)) <= 0.25,
+        )
+
+    overshooting_rooms = diagnostics.get("overshooting_rooms")
+    if not isinstance(overshooting_rooms, list) or not overshooting_rooms:
+        overshooting_rooms = _derived_room_names(data, lambda room: float(room.get("surplus") or 0.0) > 0.05)
+
+    action_rooms = diagnostics.get("action_rooms")
+    if not isinstance(action_rooms, list) or not action_rooms:
+        action_rooms = [str(r.get("name", "")).strip() for r in rooms if isinstance(r, dict) and str(r.get("name", "")).strip()]
+
+    dry_rooms = diagnostics.get("dry_rooms")
+    if not isinstance(dry_rooms, list) or not dry_rooms:
+        dry_rooms = _derived_room_names(data, lambda room: str(room.get("comfort_band", "")).strip().lower() == "t\u00f8r")
+
+    outside_temperature = context.get("outside_temperature")
+    if outside_temperature is None:
+        outside_temperature = data.get("outdoor_temp")
+
+    heating_active = context.get("heating_active")
+    if not isinstance(heating_active, bool):
+        heating_active = any(bool(room.get("is_heating_now")) for room in data.get("rooms", []) if isinstance(room, dict))
+
+    cheapest_source = context.get("cheapest_heat_source") or data.get("cheapest_heat_source")
+    if not cheapest_source:
+        cheapest_source = "Varmepumpe" if data.get("heat_pump_cheaper", False) else (data.get("cheapest_alt_name") or "Ukendt")
+
+    flow_limited = context.get("flow_limited")
+    if not isinstance(flow_limited, bool):
+        flow_limited = data.get("flow_limited") if isinstance(data.get("flow_limited"), bool) else None
+
+    request_id = decision.get("request_id") or meta.get("request_id")
+    run_id = decision.get("run_id") or meta.get("openclaw_run_id")
+
+    override_vurdering = diagnostics.get("override_reason") or diagnostics.get("no_change_reason") or "Ingen s\u00e6rskilt override-begrundelse"
+    samlet_vurdering = diagnostics.get("summary") or decision.get("reason") or data.get("ai_reason") or "Ingen ekstra forklaring"
+
+    fokusrum = diagnostics.get("focus_rooms")
+    if isinstance(fokusrum, list) and fokusrum:
+        fokusrum_text = _list_text(fokusrum)
+    else:
+        fokusrum_text = data.get("focus_room") or _list_text(action_rooms)
+        if not fokusrum_text or fokusrum_text == "Ingen":
+            fokusrum_text = "Ingen"
+
+    rum_beslutninger = []
+    for room in rooms:
+        if not isinstance(room, dict):
+            continue
+        name = str(room.get("name", "")).strip() or "Rum"
+        mode = str(room.get("mode", "")).strip() or "-"
+        target = room.get("target_temperature")
+        target_text = f"{float(target):.1f}" if isinstance(target, (int, float)) else "-"
+        reason = str(room.get("reason", "")).strip()
+        line = f"{name} -> {mode} {target_text}"
+        if reason:
+            line += f" ({reason})"
+        rum_beslutninger.append(line)
+
+    return {
+        "request_id": request_id or "Ukendt",
+        "run_id": run_id or "Ukendt",
+        "factor": data.get("ai_factor"),
+        "confidence": data.get("ai_confidence"),
+        "reason": decision.get("reason") or data.get("ai_reason") or "Ingen \u00e5rsag angivet",
+        "mode": str(global_block.get("mode") or "Ukendt"),
+        "boost": bool(global_block.get("boost", False)),
+        "outside_temperature": outside_temperature,
+        "heating_active": heating_active,
+        "cheapest_heat_source": cheapest_source,
+        "flow_limited": flow_limited,
+        "last_decision_age_sec": context.get("last_decision_age_sec") if context.get("last_decision_age_sec") is not None else data.get("last_decision_age_sec"),
+        "active_heating_rooms": active_heating_rooms,
+        "near_target_rooms": near_target_rooms,
+        "overshooting_rooms": overshooting_rooms,
+        "action_rooms": action_rooms,
+        "dry_rooms": dry_rooms,
+        "samlet_vurdering": samlet_vurdering,
+        "override_vurdering": override_vurdering,
+        "fokusrum": fokusrum_text,
+        "rum_beslutninger": rum_beslutninger,
+        "updated_at": data.get("updated_at") or data.get("last_report_generated") or "Ukendt",
+    }
 
 def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     structured = data.get("ai_structured_decision", {})
@@ -1189,6 +1366,8 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             report_engine_display=report_engine_display,
         )
         clean_points = _filtered_report_points(data, report, bullets)
+        release_info = _integration_release_info()
+        facts = _report_fact_bundle(data)
         return {
             # Keep both legacy Danish keys and canonical short/long keys,
             # so dashboard cards can render regardless of which keyset they use.
@@ -1198,9 +1377,49 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "punkter": clean_points,
             "punkter_raa": bullets,
             "rum_analyse": report.get("room_analyses", []),
+            "release_version": release_info.get("version"),
+            "release_notes": release_info.get("notes"),
+            "release_notes_lines": release_info.get("notes", "").splitlines(),
+            "release_title": f"Release {release_info.get('version')}",
+            "tid": facts.get("updated_at"),
+            "request_id": facts.get("request_id"),
+            "run_id": facts.get("run_id"),
+            "faktor": facts.get("factor"),
+            "konfidens": facts.get("confidence"),
+            "aarsag": facts.get("reason"),
+            "årsag": facts.get("reason"),
+            "samlet_vurdering": facts.get("samlet_vurdering"),
+            "override_vurdering": facts.get("override_vurdering"),
+            "fokusrum": facts.get("fokusrum"),
+            "global_mode": facts.get("mode"),
+            "global_boost": _bool_text(facts.get("boost"), unknown="Nej"),
+            "udetemperatur": facts.get("outside_temperature"),
+            "aktiv_varme": _bool_text(facts.get("heating_active")),
+            "billigste_varmekilde": facts.get("cheapest_heat_source"),
+            "flow_begraenset": _bool_text(facts.get("flow_limited")),
+            "flow_begrænset": _bool_text(facts.get("flow_limited")),
+            "sidste_beslutningsalder_sec": facts.get("last_decision_age_sec"),
+            "sidste_beslutningsalder": facts.get("last_decision_age_sec"),
+            "diagnostik_aktive_rum": _list_text(facts.get("active_heating_rooms")),
+            "aktivt_opvarmede_rum": _list_text(facts.get("active_heating_rooms")),
+            "diagnostik_taet_paa_maal": _list_text(facts.get("near_target_rooms")),
+            "diagnostik_tæt_på_mål": _list_text(facts.get("near_target_rooms")),
+            "rum_tæt_på_mål": _list_text(facts.get("near_target_rooms")),
+            "diagnostik_over_maal": _list_text(facts.get("overshooting_rooms")),
+            "over_målet": _list_text(facts.get("overshooting_rooms")),
+            "diagnostik_naer_handling": _list_text(facts.get("action_rooms")),
+            "diagnostik_nær_handling": _list_text(facts.get("action_rooms")),
+            "rum_nær_handling": _list_text(facts.get("action_rooms")),
+            "diagnostik_toerre_rum": _list_text(facts.get("dry_rooms")),
+            "diagnostik_tørre_rum": _list_text(facts.get("dry_rooms")),
+            "tørre_rum": _list_text(facts.get("dry_rooms")),
+            "rum_beslutninger": facts.get("rum_beslutninger") or [],
+            "rum_beslutninger_text": "\n".join(facts.get("rum_beslutninger") or []),
+            "sidst_opdateret": facts.get("updated_at"),
             "beslutningsmotor": data.get("ai_primary_engine_display"),
             "fallbackmotor": fallback_display,
             "beslutningskilde": data.get("ai_decision_source_display"),
+            "kilde": data.get("ai_decision_source_display"),
             "rapportmotor": report_engine_display,
             "rapportmotor_display": report_engine_display,
             "ai_provider": data.get("ai_provider"),
