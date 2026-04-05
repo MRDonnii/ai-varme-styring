@@ -2,6 +2,17 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.7
+
+Date: 2026-04-05
+
+### Changed
+- **Minimal AI payload hardening**:
+  - OpenClaw and provider payload builders now omit unknown optional fields instead of sending placeholder `0.0` values
+  - rooms without valid current/target temperature are skipped from the strict OpenClaw heating payload
+  - weather forecast, supply/return temperatures, humidity, and other optional telemetry are only sent when real data exists
+  - this makes new installations more tolerant of sparse setups with only the minimum required sensors
+
 ## v0.3.6
 
 Date: 2026-04-05

@@ -509,6 +509,34 @@ def _comfort_band_from_humidity(
     return "komfort"
 
 
+def _compact_payload_dict(payload: dict[str, Any], *, keep_empty_keys: set[str] | None = None) -> dict[str, Any]:
+    """Remove empty optional values while preserving booleans and real zeros."""
+    keep_empty = keep_empty_keys or set()
+    compact: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            nested = _compact_payload_dict(value, keep_empty_keys=keep_empty_keys)
+            if nested or key in keep_empty:
+                compact[key] = nested
+            continue
+        if isinstance(value, list):
+            items: list[Any] = []
+            for item in value:
+                if isinstance(item, dict):
+                    nested = _compact_payload_dict(item, keep_empty_keys=keep_empty_keys)
+                    if nested:
+                        items.append(nested)
+                elif item not in (None, ""):
+                    items.append(item)
+            if items or key in keep_empty:
+                compact[key] = items
+            continue
+        if value is None or value == "":
+            continue
+        compact[key] = value
+    return compact
+
+
 def _build_provider_decision_payload(openclaw_payload: dict[str, Any]) -> dict[str, Any]:
     """Compact decision payload for provider/Ollama calls."""
     runtime = openclaw_payload.get("runtime", {})
@@ -521,57 +549,59 @@ def _build_provider_decision_payload(openclaw_payload: dict[str, Any]) -> dict[s
             if not isinstance(room, dict):
                 continue
             compact_rooms.append(
-                {
-                    "name": room.get("name"),
-                    "temp": room.get("temp"),
-                    "target": room.get("target"),
-                    "deficit": room.get("deficit"),
-                    "surplus": room.get("surplus"),
-                    "opening_active": room.get("opening_active"),
-                    "room_enabled": room.get("room_enabled"),
-                    "boost_active": room.get("boost_active"),
-                    "heat_pump": room.get("heat_pump"),
-                    "heat_pump_state": room.get("heat_pump_state"),
-                    "heat_pump_power_w": room.get("heat_pump_power_w"),
-                    "active_heat_summary": room.get("active_heat_summary"),
-                    "is_heating_now": room.get("is_heating_now"),
-                }
+                _compact_payload_dict(
+                    {
+                        "name": room.get("name"),
+                        "temp": room.get("temp"),
+                        "target": room.get("target"),
+                        "deficit": room.get("deficit"),
+                        "surplus": room.get("surplus"),
+                        "humidity": room.get("humidity"),
+                        "comfort_band": room.get("comfort_band"),
+                        "comfort_gap": room.get("comfort_gap"),
+                        "opening_active": room.get("opening_active"),
+                        "room_enabled": room.get("room_enabled"),
+                        "boost_active": room.get("boost_active"),
+                        "heat_pump_state": room.get("heat_pump_state"),
+                        "heat_pump_power_w": room.get("heat_pump_power_w"),
+                        "active_heat_summary": room.get("active_heat_summary"),
+                        "is_heating_now": room.get("is_heating_now"),
+                    }
+                )
             )
-    return {
-        "timestamp_utc": openclaw_payload.get("timestamp_utc"),
-        "engine_context": {
-            "ai_provider": engine_context.get("ai_provider"),
-            "ai_primary_engine": engine_context.get("ai_primary_engine"),
-            "decision_interval_min": engine_context.get("decision_interval_min"),
+    return _compact_payload_dict(
+        {
+            "timestamp_utc": openclaw_payload.get("timestamp_utc"),
+            "engine_context": {
+                "ai_provider": engine_context.get("ai_provider"),
+                "ai_primary_engine": engine_context.get("ai_primary_engine"),
+                "decision_interval_min": engine_context.get("decision_interval_min"),
+            },
+            "runtime": {
+                "enabled": runtime.get("enabled"),
+                "presence_eco_active": runtime.get("presence_eco_active"),
+                "flow_limited": runtime.get("flow_limited"),
+                "thermostat_handover": runtime.get("thermostat_handover"),
+                "provider_ready": runtime.get("provider_ready"),
+            },
+            "prices": {
+                "electricity": prices.get("electricity"),
+                "gas": prices.get("gas"),
+                "district_heat": prices.get("district_heat"),
+                "effective_heat_pump_price": prices.get("effective_heat_pump_price"),
+                "cheapest_alt_name": prices.get("cheapest_alt_name"),
+                "cheapest_alt_price": prices.get("cheapest_alt_price"),
+                "heat_pump_cheaper": prices.get("heat_pump_cheaper"),
+                "estimated_savings_per_kwh": prices.get("estimated_savings_per_kwh"),
+            },
+            "max_deficit": openclaw_payload.get("max_deficit"),
+            "max_surplus": openclaw_payload.get("max_surplus"),
+            "outdoor_temp": openclaw_payload.get("outdoor_temp"),
+            "sensor_error": openclaw_payload.get("sensor_error"),
+            "rooms": compact_rooms,
         },
-        "runtime": {
-            "enabled": runtime.get("enabled"),
-            "presence_eco_active": runtime.get("presence_eco_active"),
-            "pid_enabled": runtime.get("pid_enabled"),
-            "learning_enabled": runtime.get("learning_enabled"),
-            "current_ai_factor": runtime.get("current_ai_factor"),
-            "current_ai_confidence": runtime.get("current_ai_confidence"),
-            "fallback_count": runtime.get("fallback_count"),
-            "provider_ready": runtime.get("provider_ready"),
-            "flow_limited": runtime.get("flow_limited"),
-            "thermostat_handover": runtime.get("thermostat_handover"),
-        },
-        "prices": {
-            "electricity": prices.get("electricity"),
-            "gas": prices.get("gas"),
-            "district_heat": prices.get("district_heat"),
-            "effective_heat_pump_price": prices.get("effective_heat_pump_price"),
-            "cheapest_alt_name": prices.get("cheapest_alt_name"),
-            "cheapest_alt_price": prices.get("cheapest_alt_price"),
-            "heat_pump_cheaper": prices.get("heat_pump_cheaper"),
-            "estimated_savings_per_kwh": prices.get("estimated_savings_per_kwh"),
-        },
-        "max_deficit": openclaw_payload.get("max_deficit"),
-        "max_surplus": openclaw_payload.get("max_surplus"),
-        "outdoor_temp": openclaw_payload.get("outdoor_temp"),
-        "sensor_error": openclaw_payload.get("sensor_error"),
-        "rooms": compact_rooms,
-    }
+        keep_empty_keys={"rooms"},
+    )
 
 
 def _build_openclaw_heating_payload(
@@ -590,7 +620,6 @@ def _build_openclaw_heating_payload(
 ) -> dict[str, Any]:
     """Build the strict OpenClaw heating contract from live integration data."""
 
-    runtime = source_payload.get("runtime", {})
     rooms = source_payload.get("rooms", [])
     request_id = str(source_payload.get("request_id") or uuid.uuid4())
     timestamp_utc = str(source_payload.get("timestamp_utc") or dt_util.utcnow().isoformat())
@@ -627,6 +656,10 @@ def _build_openclaw_heating_payload(
         for room in rooms:
             if not isinstance(room, dict):
                 continue
+            current_temperature = _safe_float(room.get("temp"))
+            target_temperature = _safe_float(room.get("target"))
+            if current_temperature is None or target_temperature is None:
+                continue
             room_name = str(room.get("name") or "Rum")
             room_rt = room_runtime.get(room_name, {}) if isinstance(room_runtime, dict) else {}
             heat_state = str(room.get("heat_pump_state") or "").strip().lower()
@@ -639,59 +672,67 @@ def _build_openclaw_heating_payload(
                 hvac_action = "off"
 
             last_switch = room_rt.get("last_switch") if isinstance(room_rt, dict) else None
-            last_heating_change_minutes = int(round(_minutes_since(last_switch, now_ts), 0))
-            if last_heating_change_minutes < 0:
-                last_heating_change_minutes = 0
+            last_heating_change_minutes: int | None = None
+            if last_switch is not None:
+                last_heating_change_minutes = int(max(0, round(_minutes_since(last_switch, now_ts), 0)))
 
             room_priority = "medium"
             if not bool(room.get("room_enabled", True)):
                 room_priority = "low"
 
             normalized_rooms.append(
-                {
-                    "name": room_name,
-                    "entity_id": str(room.get("target_number_entity") or room.get("entity_id") or ""),
-                    "current_temperature": float(room.get("temp") or 0.0),
-                    "target_temperature": float(room.get("target") or 0.0),
-                    "hvac_action": hvac_action,
-                    "temp_trend_15m": 0.0,
-                    "humidity": float(room.get("humidity") or 0.0),
-                    "window_open": bool(room.get("opening_active")),
-                    "last_heating_change_minutes": last_heating_change_minutes,
-                    "valve_open_percent": 100.0 if bool(room.get("is_heating_now")) else 0.0,
-                    "radiator_surface_temp": 0.0,
-                    "room_priority": room_priority,
-                }
+                _compact_payload_dict(
+                    {
+                        "name": room_name,
+                        "entity_id": str(room.get("target_number_entity") or room.get("entity_id") or "").strip() or None,
+                        "current_temperature": current_temperature,
+                        "target_temperature": target_temperature,
+                        "hvac_action": hvac_action,
+                        "humidity": _safe_float(room.get("humidity")),
+                        "window_open": bool(room.get("opening_active")),
+                        "last_heating_change_minutes": last_heating_change_minutes,
+                        "valve_open_percent": 100.0 if bool(room.get("is_heating_now")) else 0.0,
+                        "room_priority": room_priority,
+                    }
+                )
             )
 
-    return {
-        "type": "heating_decision",
-        "request_id": request_id,
-        "reply_transport": "mqtt",
-        "reply_topic": "homeassistant/ai_varme/openclaw/decision",
-        "timestamp_utc": timestamp_utc,
-        "mode": mode,
-        "boost": mode == "boost",
-        "heating_active": any(bool(room.get("is_heating_now")) for room in rooms if isinstance(room, dict))
-        if isinstance(rooms, list)
-        else False,
-        "outside_temperature": float(source_payload.get("outdoor_temp") or 0.0),
-        "outside_temp_trend_1h": 0.0,
-        "weather_forecast_next_2h": {
-            "temp_min": float((weather_forecast_next_2h or {}).get("temp_min") or 0.0),
-            "temp_max": float((weather_forecast_next_2h or {}).get("temp_max") or 0.0),
-            "wind_ms": float((weather_forecast_next_2h or {}).get("wind_ms") or 0.0),
+    forecast_payload = _compact_payload_dict(
+        {
+            "temp_min": _safe_float((weather_forecast_next_2h or {}).get("temp_min")),
+            "temp_max": _safe_float((weather_forecast_next_2h or {}).get("temp_max")),
+            "wind_ms": _safe_float((weather_forecast_next_2h or {}).get("wind_ms")),
+        }
+    )
+
+    return _compact_payload_dict(
+        {
+            "type": "heating_decision",
+            "request_id": request_id,
+            "reply_transport": "mqtt",
+            "reply_topic": "homeassistant/ai_varme/openclaw/decision",
+            "timestamp_utc": timestamp_utc,
+            "mode": mode,
+            "boost": mode == "boost",
+            "heating_active": any(bool(room.get("is_heating_now")) for room in rooms if isinstance(room, dict))
+            if isinstance(rooms, list)
+            else False,
+            "outside_temperature": _safe_float(source_payload.get("outdoor_temp")),
+            "weather_forecast_next_2h": forecast_payload if forecast_payload else None,
+            "rooms": normalized_rooms,
+            "last_decision": _compact_payload_dict(
+                {
+                    "factor": _safe_float(last_decision_factor),
+                    "global_mode": str(last_decision_mode or "").strip() or None,
+                }
+            ),
+            "last_decision_age_sec": int(max(0, last_decision_age_sec)) if last_decision_age_sec is not None else None,
+            "supply_temp": _safe_float(supply_temp),
+            "return_temp": _safe_float(return_temp),
+            "heating_curve_offset": _safe_float(heating_curve_offset),
         },
-        "rooms": normalized_rooms,
-        "last_decision": {
-            "factor": float(last_decision_factor or 0.0),
-            "global_mode": str(last_decision_mode or "normal"),
-        },
-        "last_decision_age_sec": int(max(0, last_decision_age_sec)),
-        "supply_temp": float(supply_temp or 0.0),
-        "return_temp": float(return_temp or 0.0),
-        "heating_curve_offset": float(heating_curve_offset or 0.0),
-    }
+        keep_empty_keys={"rooms"},
+    )
 
 
 def _legacy_automation_conflicts(hass: HomeAssistant) -> list[str]:
