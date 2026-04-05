@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.6
+
+Date: 2026-04-05
+
+### Fixed
+- **Occupancy still leaking into AI/report payloads**:
+  - removed `occupancy_active` from the main AI payload room list
+  - removed `occupancy_active` from the report payload room list
+  - together with v0.3.5 this fully removes occupancy as an AI reasoning signal outside ECO mode
+
 ## v0.3.5
 
 Date: 2026-04-05

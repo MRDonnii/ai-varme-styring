@@ -1,9 +1,8 @@
-Release v0.3.5 - Presence wording removed from AI decisions
+Release v0.3.6 - Occupancy removed from all AI payload variants
 
-This hotfix removes the remaining occupancy signals from AI decision payloads and prompt schema.
+This hotfix removes the last remaining occupancy fields from AI and report payload variants.
 
 Included changes:
-- Removed room occupancy fields from OpenClaw heating payloads.
-- Removed occupancy from compact provider decision payloads.
-- Removed `occupied_rooms` from the OpenClaw output schema prompt.
-- AI reasons should no longer explain no-action with `not occupied` or `ikke beboet`.
+- Removed `occupancy_active` from the main AI payload room list.
+- Removed `occupancy_active` from the report payload room list.
+- Together with v0.3.5, occupancy should no longer leak into AI reasons outside ECO mode.
