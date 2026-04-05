@@ -2939,7 +2939,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 "deficit": round(r.deficit, 2),
                                 "surplus": round(r.surplus, 2),
                                 "opening_active": bool(r.opening_active),
-                                "occupancy_active": bool(r.occupancy_active),
                                 "room_enabled": bool(r.room_enabled),
                                 "presence_eco_enabled": bool(r.presence_eco_enabled),
                                 "learning_enabled": bool(r.learning_enabled),
@@ -3175,7 +3174,6 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 "target": round(r.target, decimals),
                                 "deficit": round(r.deficit, decimals),
                                 "surplus": round(r.surplus, decimals),
-                                "occupancy_active": bool(r.occupancy_active),
                                 "opening_active": bool(r.opening_active),
                                 "heat_pump": r.heat_pump,
                                 "heat_pump_state": (
