@@ -1,10 +1,9 @@
-Release v0.3.11 - Full helper self-heal for room control
+Release v0.3.12 - Runtime migration hardening and helper matching
 
-This release hardens setup and runtime so required room target helpers are repaired automatically.
+This patch addresses a reported runtime crash and improves helper auto-linking on mixed installations.
 
 Included changes:
-- Room setup and room options now always ensure `room_target_number`, even without selected area.
-- Missing room target helpers are resolved from existing `input_number` entities when possible.
-- If no match exists and Home Assistant supports `input_number.create`, helpers are created automatically.
-- Coordinator now performs periodic runtime self-heal and persists repaired helper links to options.
-- Runtime helper repair events are logged to `openclaw_services_ensure.log` for easier diagnostics.
+- Backfills missing room runtime keys during each control cycle.
+- Fixes upgrade-state crash patterns such as KeyError `closed_since`.
+- Target helper resolvers now support plain helper ids like `input_number.kokken`.
+- Existing rooms can relink target helpers even when old naming conventions are used.
