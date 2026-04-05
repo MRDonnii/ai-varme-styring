@@ -1,8 +1,9 @@
-Release v0.3.9 - Garage heat-start responsiveness
+Release v0.3.10 - Room target helper auto-ensure
 
-This hotfix makes Garage react sooner when it is slightly below target.
+This hotfix makes fresh installations and migrated setups more robust by ensuring room target helpers are linked and usable.
 
 Included changes:
-- Garage rooms now use lower default heat-pump start thresholds so small deficits like 21.8 to 22.0 are not held back by the old 0.4?C defaults.
-- Existing installations that still carry the old default garage thresholds are migrated automatically at runtime.
-- The room editor now shows the lower garage defaults for new or edited garage rooms.
+- The integration now validates room target helper links during setup.
+- Missing helper links are repaired by resolving existing matching input_number entities.
+- If no match exists and Home Assistant exposes `input_number.create`, a target helper is created automatically.
+- Updated helper links are persisted to config entry options to survive restart.

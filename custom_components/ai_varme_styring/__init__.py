@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import traceback
 from pathlib import Path
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -32,6 +34,9 @@ from .const import (
     CONF_ENABLE_PID_LAYER,
     CONF_ENABLE_LEARNING,
     CONF_ENABLE_PRESENCE_ECO,
+    CONF_ROOMS,
+    CONF_ROOM_NAME,
+    CONF_ROOM_TARGET_NUMBER,
     CONF_PID_DEADBAND_C,
     CONF_PID_INTEGRAL_LIMIT,
     CONF_PID_KD,
@@ -78,6 +83,111 @@ def _write_setup_trace(stage: str, **payload: object) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _room_slug(room_name: str) -> str:
+    normalized = str(room_name or "").lower()
+    normalized = normalized.replace("\u00e6", "ae").replace("\u00f8", "oe").replace("\u00e5", "aa")
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
+    return normalized or "rum"
+
+
+def _find_target_helper_entity(hass: HomeAssistant, room_name: str) -> str:
+    slug = _room_slug(room_name)
+    preferred = [
+        f"input_number.thermostat_{slug}_target",
+        f"input_number.{slug}_temperature_target",
+        f"input_number.ai_varme_target_{slug}",
+    ]
+    for entity_id in preferred:
+        if hass.states.get(entity_id) is not None:
+            return entity_id
+
+    for st in hass.states.async_all("input_number"):
+        eid = str(getattr(st, "entity_id", "") or "").lower()
+        if slug in eid and ("target" in eid or "temperature" in eid or "temp" in eid):
+            return st.entity_id
+    return ""
+
+
+async def _async_create_target_helper(hass: HomeAssistant, room_name: str) -> str:
+    if not hass.services.has_service("input_number", "create"):
+        return ""
+
+    slug = _room_slug(room_name)
+    before = {st.entity_id for st in hass.states.async_all("input_number")}
+    service_data = {
+        "name": f"AI Varme {room_name} target",
+        "min": 10.0,
+        "max": 30.0,
+        "step": 0.5,
+        "mode": "box",
+        "icon": "mdi:target",
+    }
+    try:
+        await hass.services.async_call(
+            "input_number",
+            "create",
+            service_data,
+            blocking=True,
+        )
+    except Exception as err:  # noqa: BLE001
+        _write_setup_trace("helper_create_failed", room=room_name, error=str(err))
+        return ""
+
+    after = {st.entity_id for st in hass.states.async_all("input_number")}
+    created = sorted(after - before)
+    if created:
+        for entity_id in created:
+            if slug in entity_id.lower():
+                return entity_id
+        return created[0]
+
+    return _find_target_helper_entity(hass, room_name)
+
+
+async def _async_ensure_room_target_helpers(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    cfg = {**entry.data, **entry.options}
+    rooms = cfg.get(CONF_ROOMS, [])
+    if not isinstance(rooms, list) or not rooms:
+        return
+
+    changed = False
+    updated_rooms: list[dict[str, Any]] = []
+    for room_cfg in rooms:
+        if not isinstance(room_cfg, dict):
+            continue
+
+        room_copy = dict(room_cfg)
+        room_name = str(room_copy.get(CONF_ROOM_NAME, "")).strip()
+        if not room_name:
+            updated_rooms.append(room_copy)
+            continue
+
+        current_target = str(room_copy.get(CONF_ROOM_TARGET_NUMBER, "") or "").strip()
+        if current_target and hass.states.get(current_target) is not None:
+            updated_rooms.append(room_copy)
+            continue
+
+        resolved = _find_target_helper_entity(hass, room_name)
+        if not resolved:
+            resolved = await _async_create_target_helper(hass, room_name)
+        if resolved:
+            room_copy[CONF_ROOM_TARGET_NUMBER] = resolved
+            changed = True
+            _write_setup_trace("helper_linked", room=room_name, helper=resolved)
+        else:
+            _write_setup_trace("helper_missing", room=room_name)
+
+        updated_rooms.append(room_copy)
+
+    if not changed:
+        return
+
+    new_options = dict(entry.options)
+    new_options[CONF_ROOMS] = updated_rooms
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    _write_setup_trace("helpers_options_updated", entry_id=entry.entry_id)
 
 
 async def _async_remove_deprecated_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -151,12 +261,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "create",
             {
                 "title": "AI Varme Styring setup-fejl",
-                "message": f"Første refresh fejlede: {err}",
+                "message": f"Forste refresh fejlede: {err}",
                 "notification_id": f"{DOMAIN}_{entry.entry_id}_setup_error",
             },
             blocking=False,
         )
         raise
+
+    await _async_ensure_room_target_helpers(hass, entry)
     await _async_remove_deprecated_entities(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(
