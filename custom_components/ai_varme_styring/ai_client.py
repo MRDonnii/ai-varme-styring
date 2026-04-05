@@ -286,7 +286,6 @@ class AiProviderClient:
                 '"mode": "<normal|night|away|boost|eco|off>", '
                 '"boost": <true|false>, '
                 '"room_count": <integer>, '
-                '"occupied_rooms": <integer>'
                 "}"
                 "} "
                 "Rules: "

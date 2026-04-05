@@ -2,6 +2,17 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.5
+
+Date: 2026-04-05
+
+### Fixed
+- **Presence wording still leaking into AI reasons**:
+  - removed room occupancy fields from OpenClaw heating payloads
+  - removed occupancy from compact provider decision payloads
+  - removed `occupied_rooms` from the OpenClaw output schema prompt
+  - AI decisions should no longer justify no-action with phrases like `not occupied` or `ikke beboet`
+
 ## v0.3.4
 
 Date: 2026-04-05
