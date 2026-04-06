@@ -874,24 +874,6 @@ def _heat_pump_priority_options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 )
             ),
             vol.Required(
-                CONF_HEAT_SOURCE_DIRECTION_BIAS,
-                default=defaults.get(
-                    CONF_HEAT_SOURCE_DIRECTION_BIAS,
-                    DEFAULT_HEAT_SOURCE_DIRECTION_BIAS,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=-2.0, max=2.0, step=0.1, mode=selector.NumberSelectorMode.SLIDER)
-            ),
-            vol.Required(
-                CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
-                default=defaults.get(
-                    CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
-                    DEFAULT_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=4, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
                 CONF_RADIATOR_SETBACK_C,
                 default=defaults.get(CONF_RADIATOR_SETBACK_C, DEFAULT_RADIATOR_SETBACK_C),
             ): selector.NumberSelector(
@@ -999,7 +981,7 @@ def _providers_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 def _room_schema(
-    defaults: dict[str, Any] | None = None, *, include_add_another: bool = True, room_name_options: list[str] | None = None
+    defaults: dict[str, Any] | None = None, *, include_add_another: bool = True, room_name_options: list[str] | None = None, room_group_options: list[str] | None = None
 ) -> vol.Schema:
     defaults = defaults or {}
     room_name = str(defaults.get(CONF_ROOM_NAME, "") or "").strip().lower()
@@ -1032,10 +1014,19 @@ def _room_schema(
                 CONF_ROOM_ENABLE_OPENING_PAUSE,
                 default=defaults.get(CONF_ROOM_ENABLE_OPENING_PAUSE, DEFAULT_ROOM_ENABLE_OPENING_PAUSE),
             ): bool,
+            # Link group: choose existing room/group ids, or type a new one.
             vol.Optional(
                 CONF_ROOM_LINK_GROUP,
                 default=defaults.get(CONF_ROOM_LINK_GROUP, DEFAULT_ROOM_LINK_GROUP),
-            ): str,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[{"value": "", "label": "Ingen"}] + [
+                        {"value": g, "label": g} for g in sorted(set(room_group_options or [])) if str(g).strip()
+                    ],
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required(
                 CONF_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
                 default=defaults.get(
@@ -1261,6 +1252,7 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 room = dict(user_input)
                 room[CONF_ROOM_NAME] = room_name
+                room[CONF_ROOM_LINK_GROUP] = str(room.get(CONF_ROOM_LINK_GROUP, "") or "").strip()
                 adjacent = room.get(CONF_ROOM_ADJACENT_ROOMS, [])
                 if not isinstance(adjacent, list):
                     adjacent = []
@@ -1270,7 +1262,7 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if add_another:
                     return self.async_show_form(
                         step_id="room",
-                        data_schema=_room_schema(room_name_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)]),
+                        data_schema=_room_schema(room_name_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)], room_group_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)]),
                         description_placeholders={"room_count": str(len(self._rooms))},
                     )
                 data = dict(self._base_input)
@@ -1279,7 +1271,7 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="room",
-            data_schema=_room_schema(room_name_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)]),
+            data_schema=_room_schema(room_name_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)], room_group_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)]),
             errors=errors,
             description_placeholders={"room_count": str(len(self._rooms))},
         )
@@ -1395,6 +1387,21 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             if name:
                 names.append(name)
         return names
+
+    def _room_link_group_choices(self, *, exclude_index: int | None = None) -> list[str]:
+        choices: list[str] = []
+        for idx, room in enumerate(self._rooms):
+            if exclude_index is not None and idx == exclude_index:
+                continue
+            if not isinstance(room, dict):
+                continue
+            room_name = str(room.get(CONF_ROOM_NAME, "") or "").strip()
+            if room_name:
+                choices.append(room_name)
+            group = str(room.get(CONF_ROOM_LINK_GROUP, "") or "").strip()
+            if group:
+                choices.append(group)
+        return sorted(set(choices))
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         self._ensure_state()
@@ -1514,6 +1521,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             else:
                 room = dict(user_input)
                 room[CONF_ROOM_NAME] = room_name
+                room[CONF_ROOM_LINK_GROUP] = str(room.get(CONF_ROOM_LINK_GROUP, "") or "").strip()
                 adjacent = room.get(CONF_ROOM_ADJACENT_ROOMS, [])
                 if not isinstance(adjacent, list):
                     adjacent = []
@@ -1522,7 +1530,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
                 return await self.async_step_init()
         return self.async_show_form(
             step_id="room_add",
-            data_schema=_room_schema(include_add_another=False, room_name_options=self._room_name_choices()),
+            data_schema=_room_schema(include_add_another=False, room_name_options=self._room_name_choices(), room_group_options=self._room_link_group_choices()),
             errors=errors,
         )
 
@@ -1563,6 +1571,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             else:
                 room = dict(user_input)
                 room[CONF_ROOM_NAME] = room_name
+                room[CONF_ROOM_LINK_GROUP] = str(room.get(CONF_ROOM_LINK_GROUP, "") or "").strip()
                 adjacent = room.get(CONF_ROOM_ADJACENT_ROOMS, [])
                 if not isinstance(adjacent, list):
                     adjacent = []
@@ -1572,7 +1581,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
                 return await self.async_step_init()
         return self.async_show_form(
             step_id="room_edit",
-            data_schema=_room_schema(self._rooms[idx], include_add_another=False, room_name_options=self._room_name_choices(exclude_index=idx)),
+            data_schema=_room_schema(self._rooms[idx], include_add_another=False, room_name_options=self._room_name_choices(exclude_index=idx), room_group_options=self._room_link_group_choices(exclude_index=idx)),
             errors=errors,
         )
 

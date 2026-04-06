@@ -1,10 +1,9 @@
-Release v0.3.17 - Room-level bias and adjacent-room selection
+Release v0.3.18 - Better room-level tuning UX
 
-New in room settings:
-- Direction slider per room: radiator (-) <-> heat pump (+)
-- Extra radiator setback per room at cheap power
-- Select adjacent rooms per room for shared airflow logic
+What changed:
+- `room_link_group` is now a selectable room-edit field with existing choices and custom value support.
+- You can remove a link group by choosing blank (Ingen).
+- Heat-source direction slider is now focused in room edit (not duplicated in generic settings).
 
-Behavior:
-- Heat-pump-priority tuning can now be done directly under each finished room.
-- Adjacent rooms to heat-pump rooms can be lowered more on radiator target when cheap power bias is active.
+Result:
+- Easier per-room tuning where you already edit finished rooms.
