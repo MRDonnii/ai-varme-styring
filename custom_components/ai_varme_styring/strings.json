@@ -121,7 +121,7 @@
       },
       "heat_pump_priority": {
         "title": "Billig strom: Varmepumpe-prioritet",
-        "description": "Juster billig-strom strategi: plus-retning giver mere varmepumpe og lavere radiator-maal, minus-retning giver mere radiator-prioritet.",
+        "description": "Juster billig-strom strategi. Globale felter styrer standard, og under hvert rum kan du finjustere retning og tilstodende rum.",
         "data": {
           "enable_price_awareness": "Aktiver prisbevidst styring",
           "price_margin": "Pris-margin for skift",

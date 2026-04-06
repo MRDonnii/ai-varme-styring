@@ -2,6 +2,21 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.17
+
+Date: 2026-04-06
+
+### Added
+- **Room-level heat source bias controls** under room edit:
+  - `room_heat_source_direction_bias` (radiator (-) <-> varmepumpe (+))
+  - `room_cheap_power_radiator_setback_extra_c` (extra radiator reduction)
+- **Room adjacency selection** under room edit:
+  - `room_adjacent_rooms` lets you choose connected rooms for shared-airflow strategy
+
+### Changed
+- Cheap-power control now uses room-level bias values when present.
+- Adjacent rooms linked to heat-pump rooms can now get additional radiator reduction when cheap-power heat-pump bias is active.
+
 ## v0.3.16
 
 Date: 2026-04-06
