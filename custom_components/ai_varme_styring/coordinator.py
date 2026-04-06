@@ -1077,6 +1077,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_room_helper_selfheal_ts: float | None = None
         self._analytics_samples: list[dict[str, Any]] = []
         self._manual_baseline: dict[str, dict[str, Any]] = {}
+        self._known_heat_pump_entities: set[str] = set()
         self._last_valid_prices: dict[str, float] = {}
         self._cycle_temperature_commands: dict[str, float] = {}
         self._cycle_hvac_commands: dict[str, str] = {}
@@ -1860,11 +1861,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not entity_id or target is None:
             return
         target_f = float(target)
-        is_qlima_heat_pump = entity_id.startswith("climate.qlima_")
-        if is_qlima_heat_pump:
+        is_known_heat_pump = (
+            entity_id in self._known_heat_pump_entities
+            or entity_id.startswith("climate.qlima_")
+        )
+        if is_known_heat_pump:
             target_f = float(round(target_f))
+        else:
+            target_f = round(target_f * 2.0) / 2.0
         pending = self._cycle_temperature_commands.get(entity_id)
-        compare_margin = 0.49 if is_qlima_heat_pump else 0.05
+        compare_margin = 0.49 if is_known_heat_pump else 0.24
         if pending is not None and abs(pending - target_f) < compare_margin:
             return
         recent = self._recent_temperature_commands.get(entity_id)
@@ -2944,6 +2950,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 finally:
                     self._startup_sensor_retry_in_progress = False
             
+            self._known_heat_pump_entities = {
+                str(r.heat_pump) for r in rooms if isinstance(r.heat_pump, str) and r.heat_pump
+            }
+
             room_slug_map: dict[str, RoomSnapshot] = {}
             for r in rooms:
                 room_slug_map[_slug_text(r.name)] = r
@@ -4127,8 +4137,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     actions.append(
                                         f"{room.name}: komfortmode -> radiator assist til AI-mål ({rad_target}°C)"
                                     )
-                        # In cheap-power heat-pump bias, keep radiator below room target in HP rooms.
-                        if cheap_hp_bias_active and room.heat_pump:
+                        # In heat-pump-priority mode, keep radiator below target unless deficit is significant.
+                        cap_bias_active = bool(
+                            room.heat_pump
+                            and (
+                                cheap_hp_bias_active
+                                or max(0.0, room.room_heat_source_direction_bias) > 0.0
+                            )
+                        )
+                        radiator_help_deficit_threshold = 0.5
+                        if cap_bias_active and room.deficit < radiator_help_deficit_threshold:
                             min_hp_setback = max(
                                 0.5,
                                 0.5 + (max(0.0, room.room_heat_source_direction_bias) * 0.3),
@@ -4137,7 +4155,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             if rad_target > hp_radiator_cap:
                                 rad_target = hp_radiator_cap
                                 actions.append(
-                                    f"{room.name}: billig strom HP-cap -> radiator {rad_target}C"
+                                    f"{room.name}: HP-prio cap -> radiator {rad_target}C"
                                 )
 
                         if eco_room_enabled and rt.get("eco_active", False):

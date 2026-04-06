@@ -2,6 +2,22 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.20
+
+Date: 2026-04-06
+
+### Fixed
+- **Radiator behavior in heat-pump-priority mode**:
+  - radiator target in heat-pump rooms is now capped below AI target only while room deficit is small
+  - if room deficit grows (>= 0.5C), radiator is allowed to help raise temperature
+  - this keeps radiator down near target but still recovers cold rooms correctly
+
+### Fixed
+- **Temperature step handling by device type**:
+  - heat pump targets are normalized to whole degrees
+  - radiator/thermostat targets are normalized to 0.5C steps
+  - avoids drift and inconsistent setpoints against device step capabilities
+
 ## v0.3.19
 
 Date: 2026-04-06
