@@ -60,6 +60,8 @@ from .const import (
     CONF_HUMIDITY_MAX_OFFSET_C,
     CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+    CONF_HEAT_SOURCE_DIRECTION_BIAS,
+    CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     CONF_OLLAMA_HOST,
     CONF_OUTDOOR_TEMP_SENSOR,
     CONF_OPENCLAW_ENABLED,
@@ -133,6 +135,8 @@ from .const import (
     DEFAULT_HUMIDITY_MAX_OFFSET_C,
     DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
+    DEFAULT_HEAT_SOURCE_DIRECTION_BIAS,
+    DEFAULT_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     DEFAULT_OPENCLAW_ENABLED,
     DEFAULT_OPENCLAW_BRIDGE_URL,
     DEFAULT_OPENCLAW_MODEL_FALLBACK,
@@ -2992,6 +2996,20 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
                 )
             ).strip().lower()
+            heat_source_direction_bias = float(
+                cfg.get(
+                    CONF_HEAT_SOURCE_DIRECTION_BIAS,
+                    DEFAULT_HEAT_SOURCE_DIRECTION_BIAS,
+                )
+            )
+            heat_source_direction_bias = max(-2.0, min(2.0, heat_source_direction_bias))
+            cheap_power_radiator_setback_extra_c = float(
+                cfg.get(
+                    CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                    DEFAULT_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                )
+            )
+            cheap_power_radiator_setback_extra_c = max(0.0, min(4.0, cheap_power_radiator_setback_extra_c))
             # Prefer legacy heat-price sensors when present (COP + boiler-efficiency aware):
             # - sensor.varmepris_varmepumpe
             # - sensor.varmepris_gasfyr
@@ -3149,6 +3167,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "price_awareness": price_awareness,
                             "heat_pump_cheap_priority_factor": round(heat_pump_cheap_priority_factor, 2),
                             "heat_pump_cheap_fan_mode": heat_pump_cheap_fan_mode,
+                "heat_source_direction_bias": round(heat_source_direction_bias, 2),
+                "cheap_power_radiator_setback_extra_c": round(cheap_power_radiator_setback_extra_c, 2),
+                            "heat_source_direction_bias": round(heat_source_direction_bias, 2),
+                            "cheap_power_radiator_setback_extra_c": round(cheap_power_radiator_setback_extra_c, 2),
                         },
                         "max_deficit": round(max_deficit, 2),
                         "max_surplus": round(max_surplus, 2),
@@ -3719,9 +3741,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             effective_deficit = max(effective_deficit, comfort_effective_gap)
                         learn_start_offset = float(rt.get("learn_start_offset", 0.0))
                         learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
+                        direction_bias_active = heat_source_direction_bias if cheap_hp_bias_active else 0.0
                         room_hp_priority_factor = (
-                            heat_pump_cheap_priority_factor
-                            if (cheap_hp_bias_active and room.heat_pump)
+                            max(0.5, min(2.5, heat_pump_cheap_priority_factor + (direction_bias_active * 0.4)))
+                            if room.heat_pump
                             else 1.0
                         )
                         start_threshold = max(
@@ -3989,9 +4012,15 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if room.heat_pump:
                             room_radiator_setback = radiator_setback
                             if cheap_hp_bias_active:
+                                direction_bonus = max(0.0, heat_source_direction_bias) * 0.8
+                                direction_penalty = max(0.0, -heat_source_direction_bias) * 0.8
                                 room_radiator_setback = max(
                                     0.0,
-                                    radiator_setback + (room_hp_priority_factor - 1.0) * 1.5,
+                                    radiator_setback
+                                    + cheap_power_radiator_setback_extra_c
+                                    + (room_hp_priority_factor - 1.0) * 1.5
+                                    + direction_bonus
+                                    - direction_penalty,
                                 )
                             rad_target = round(
                                 max(
@@ -4332,6 +4361,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             fallback.setdefault("thermostat_handover", False)
             fallback.setdefault("heat_pump_cheap_priority_factor", DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR)
             fallback.setdefault("heat_pump_cheap_fan_mode", DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE)
+            fallback.setdefault("heat_source_direction_bias", DEFAULT_HEAT_SOURCE_DIRECTION_BIAS)
+            fallback.setdefault("cheap_power_radiator_setback_extra_c", DEFAULT_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C)
             fallback.setdefault("opening_active", False)
             fallback.setdefault("presence_eco_active", False)
             fallback.setdefault("flow_limited", False)

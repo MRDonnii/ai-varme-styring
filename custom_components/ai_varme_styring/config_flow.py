@@ -47,6 +47,8 @@ from .const import (
     CONF_HUMIDITY_MAX_OFFSET_C,
     CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+    CONF_HEAT_SOURCE_DIRECTION_BIAS,
+    CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     CONF_NAME,
     CONF_OPENCLAW_ENABLED,
     CONF_OPENCLAW_BRIDGE_URL,
@@ -127,6 +129,8 @@ from .const import (
     DEFAULT_HUMIDITY_MAX_OFFSET_C,
     DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
+    DEFAULT_HEAT_SOURCE_DIRECTION_BIAS,
+    DEFAULT_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     DEFAULT_NAME,
     DEFAULT_OPENCLAW_ENABLED,
     DEFAULT_OPENCLAW_BRIDGE_URL,
@@ -863,6 +867,24 @@ def _heat_pump_priority_options_schema(defaults: dict[str, Any]) -> vol.Schema:
                     options=CHEAP_FAN_MODE_OPTIONS,
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
+            ),
+            vol.Required(
+                CONF_HEAT_SOURCE_DIRECTION_BIAS,
+                default=defaults.get(
+                    CONF_HEAT_SOURCE_DIRECTION_BIAS,
+                    DEFAULT_HEAT_SOURCE_DIRECTION_BIAS,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=-2.0, max=2.0, step=0.1, mode=selector.NumberSelectorMode.SLIDER)
+            ),
+            vol.Required(
+                CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                default=defaults.get(
+                    CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                    DEFAULT_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=4, step=0.1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_RADIATOR_SETBACK_C,

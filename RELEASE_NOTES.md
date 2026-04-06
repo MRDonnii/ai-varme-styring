@@ -1,11 +1,11 @@
-Release v0.3.15 - Easier setup for cheap-power heat pump tuning
+Release v0.3.16 - Heat source direction slider and stronger radiator setback
 
-New options section:
+New in cheap-power tuning:
+- `heat_source_direction_bias` slider (-2.0 to +2.0)
+  - negative = more radiator priority
+  - positive = more heat pump priority
+- `cheap_power_radiator_setback_extra_c`
+  - lowers radiator targets further during cheap-power heat-pump bias
+
+These are grouped under:
 - Billig strom: varmepumpe-prioritet
-
-You can now adjust the key cheap-power tuning fields in one dedicated place:
-- Price awareness
-- Price margin
-- Heat pump cheap priority factor
-- Heat pump cheap fan mode
-- Radiator setback

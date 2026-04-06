@@ -121,12 +121,14 @@
       },
       "heat_pump_priority": {
         "title": "Billig strom: Varmepumpe-prioritet",
-        "description": "Juster hvor aggressivt varmepumper prioriteres ved billig strom, inkl. fan-mode og radiator-setback.",
+        "description": "Juster billig-strom strategi: plus-retning giver mere varmepumpe og lavere radiator-maal, minus-retning giver mere radiator-prioritet.",
         "data": {
           "enable_price_awareness": "Aktiver prisbevidst styring",
           "price_margin": "Pris-margin for skift",
           "heat_pump_cheap_priority_factor": "Varmepumpe prioritet ved billig stroem (faktor)",
           "heat_pump_cheap_fan_mode": "Varmepumpe fan-prioritet ved billig stroem",
+          "heat_source_direction_bias": "Retning: radiator (-) <-> varmepumpe (+)",
+          "cheap_power_radiator_setback_extra_c": "Ekstra radiator-nedsaetning ved billig stroem",
           "radiator_setback_c": "Radiator setback (grader)"
         }
       },
