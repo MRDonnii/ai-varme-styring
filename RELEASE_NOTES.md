@@ -1,11 +1,10 @@
-Release v0.3.16 - Heat source direction slider and stronger radiator setback
+Release v0.3.17 - Room-level bias and adjacent-room selection
 
-New in cheap-power tuning:
-- `heat_source_direction_bias` slider (-2.0 to +2.0)
-  - negative = more radiator priority
-  - positive = more heat pump priority
-- `cheap_power_radiator_setback_extra_c`
-  - lowers radiator targets further during cheap-power heat-pump bias
+New in room settings:
+- Direction slider per room: radiator (-) <-> heat pump (+)
+- Extra radiator setback per room at cheap power
+- Select adjacent rooms per room for shared airflow logic
 
-These are grouped under:
-- Billig strom: varmepumpe-prioritet
+Behavior:
+- Heat-pump-priority tuning can now be done directly under each finished room.
+- Adjacent rooms to heat-pump rooms can be lowered more on radiator target when cheap power bias is active.

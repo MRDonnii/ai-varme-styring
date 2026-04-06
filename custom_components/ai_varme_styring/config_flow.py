@@ -90,6 +90,9 @@ from .const import (
     CONF_ROOM_RADIATORS,
     CONF_ROOM_ANTI_SHORT_CYCLE_MIN,
     CONF_ROOM_LINK_GROUP,
+    CONF_ROOM_ADJACENT_ROOMS,
+    CONF_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+    CONF_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     CONF_ROOM_MASSIVE_OVERHEAT_C,
     CONF_ROOM_MASSIVE_OVERHEAT_MIN,
     CONF_ROOM_PAUSE_AFTER_OPEN_MIN,
@@ -162,6 +165,8 @@ from .const import (
     DEFAULT_UPDATE_SECONDS,
     DEFAULT_ROOM_ANTI_SHORT_CYCLE_MIN,
     DEFAULT_ROOM_LINK_GROUP,
+    DEFAULT_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+    DEFAULT_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     DEFAULT_ROOM_MASSIVE_OVERHEAT_C,
     DEFAULT_ROOM_MASSIVE_OVERHEAT_MIN,
     DEFAULT_ROOM_PAUSE_AFTER_OPEN_MIN,
@@ -994,7 +999,7 @@ def _providers_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 def _room_schema(
-    defaults: dict[str, Any] | None = None, *, include_add_another: bool = True
+    defaults: dict[str, Any] | None = None, *, include_add_another: bool = True, room_name_options: list[str] | None = None
 ) -> vol.Schema:
     defaults = defaults or {}
     room_name = str(defaults.get(CONF_ROOM_NAME, "") or "").strip().lower()
@@ -1031,6 +1036,24 @@ def _room_schema(
                 CONF_ROOM_LINK_GROUP,
                 default=defaults.get(CONF_ROOM_LINK_GROUP, DEFAULT_ROOM_LINK_GROUP),
             ): str,
+            vol.Required(
+                CONF_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+                default=defaults.get(
+                    CONF_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+                    DEFAULT_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=-2.0, max=2.0, step=0.1, mode=selector.NumberSelectorMode.SLIDER)
+            ),
+            vol.Required(
+                CONF_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                default=defaults.get(
+                    CONF_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                    DEFAULT_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=4, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Required(
                 CONF_ROOM_ANTI_SHORT_CYCLE_MIN,
                 default=defaults.get(
@@ -1113,6 +1136,20 @@ def _room_schema(
     _add_optional_entity_field(schema, defaults, CONF_ROOM_RADIATORS, "climate", multiple=True)
     _add_optional_entity_field(schema, defaults, CONF_ROOM_OPENING_SENSORS, "binary_sensor", multiple=True)
     _add_optional_entity_field(schema, defaults, CONF_ROOM_OCCUPANCY_SENSORS, "binary_sensor", multiple=True)
+    name_options = [name for name in (room_name_options or []) if str(name or "").strip()]
+    current_room_name = str(defaults.get(CONF_ROOM_NAME, "") or "").strip()
+    name_options = [n for n in name_options if n != current_room_name]
+    if name_options:
+        default_adjacent = defaults.get(CONF_ROOM_ADJACENT_ROOMS, [])
+        if not isinstance(default_adjacent, list):
+            default_adjacent = []
+        schema[vol.Optional(CONF_ROOM_ADJACENT_ROOMS, default=default_adjacent)] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[{"value": n, "label": n} for n in sorted(name_options)],
+                multiple=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
     if include_add_another:
         schema[vol.Required("add_another", default=True)] = bool
     return vol.Schema(schema)
@@ -1224,12 +1261,16 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 room = dict(user_input)
                 room[CONF_ROOM_NAME] = room_name
+                adjacent = room.get(CONF_ROOM_ADJACENT_ROOMS, [])
+                if not isinstance(adjacent, list):
+                    adjacent = []
+                room[CONF_ROOM_ADJACENT_ROOMS] = [str(x) for x in adjacent if str(x).strip() and str(x) != room_name]
                 add_another = bool(room.pop("add_another", False))
                 self._rooms.append(room)
                 if add_another:
                     return self.async_show_form(
                         step_id="room",
-                        data_schema=_room_schema(),
+                        data_schema=_room_schema(room_name_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)]),
                         description_placeholders={"room_count": str(len(self._rooms))},
                     )
                 data = dict(self._base_input)
@@ -1238,7 +1279,7 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="room",
-            data_schema=_room_schema(),
+            data_schema=_room_schema(room_name_options=[str(r.get(CONF_ROOM_NAME, "")) for r in self._rooms if isinstance(r, dict)]),
             errors=errors,
             description_placeholders={"room_count": str(len(self._rooms))},
         )
@@ -1315,6 +1356,8 @@ class AiVarmeStyringConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "binary_sensor", ("motion", "presence", "occupancy", "bevag", "bevæg", "tilstede")
             )
 
+        if CONF_ROOM_ADJACENT_ROOMS not in room_input:
+            room_input[CONF_ROOM_ADJACENT_ROOMS] = []
         room_input = await _ensure_room_target_helper_entity(self.hass, room_input)
         return room_input
 
@@ -1340,6 +1383,18 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             k: v for k, v in defaults.items() if k != CONF_ROOMS
         }
         self._rooms = list(defaults.get(CONF_ROOMS, []))
+
+    def _room_name_choices(self, *, exclude_index: int | None = None) -> list[str]:
+        names: list[str] = []
+        for idx, room in enumerate(self._rooms):
+            if exclude_index is not None and idx == exclude_index:
+                continue
+            if not isinstance(room, dict):
+                continue
+            name = str(room.get(CONF_ROOM_NAME, "") or "").strip()
+            if name:
+                names.append(name)
+        return names
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         self._ensure_state()
@@ -1459,11 +1514,15 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             else:
                 room = dict(user_input)
                 room[CONF_ROOM_NAME] = room_name
+                adjacent = room.get(CONF_ROOM_ADJACENT_ROOMS, [])
+                if not isinstance(adjacent, list):
+                    adjacent = []
+                room[CONF_ROOM_ADJACENT_ROOMS] = [str(x) for x in adjacent if str(x).strip() and str(x) != room_name]
                 self._rooms.append(room)
                 return await self.async_step_init()
         return self.async_show_form(
             step_id="room_add",
-            data_schema=_room_schema(include_add_another=False),
+            data_schema=_room_schema(include_add_another=False, room_name_options=self._room_name_choices()),
             errors=errors,
         )
 
@@ -1504,12 +1563,16 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
             else:
                 room = dict(user_input)
                 room[CONF_ROOM_NAME] = room_name
+                adjacent = room.get(CONF_ROOM_ADJACENT_ROOMS, [])
+                if not isinstance(adjacent, list):
+                    adjacent = []
+                room[CONF_ROOM_ADJACENT_ROOMS] = [str(x) for x in adjacent if str(x).strip() and str(x) != room_name]
                 self._rooms[idx] = room
                 self._selected_room_index = None
                 return await self.async_step_init()
         return self.async_show_form(
             step_id="room_edit",
-            data_schema=_room_schema(self._rooms[idx], include_add_another=False),
+            data_schema=_room_schema(self._rooms[idx], include_add_another=False, room_name_options=self._room_name_choices(exclude_index=idx)),
             errors=errors,
         )
 

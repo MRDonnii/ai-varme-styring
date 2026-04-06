@@ -94,6 +94,9 @@ from .const import (
     CONF_ROOM_HUMIDITY_SENSOR,
     CONF_ROOM_HEAT_PUMP_POWER_SENSOR,
     CONF_ROOM_LINK_GROUP,
+    CONF_ROOM_ADJACENT_ROOMS,
+    CONF_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+    CONF_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     CONF_ROOM_MASSIVE_OVERHEAT_C,
     CONF_ROOM_MASSIVE_OVERHEAT_MIN,
     CONF_ROOM_NAME,
@@ -164,6 +167,8 @@ from .const import (
     DEFAULT_ROOM_ENABLE_LEARNING,
     DEFAULT_ROOM_ENABLE_OPENING_PAUSE,
     DEFAULT_ROOM_LINK_GROUP,
+    DEFAULT_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+    DEFAULT_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
     DEFAULT_ROOM_MASSIVE_OVERHEAT_C,
     DEFAULT_ROOM_MASSIVE_OVERHEAT_MIN,
     DEFAULT_ROOM_PAUSE_AFTER_OPEN_MIN,
@@ -1021,6 +1026,9 @@ class RoomSnapshot:
     heat_pump_power_w: float | None
     radiators: list[str]
     link_group: str
+    adjacent_rooms: list[str]
+    room_heat_source_direction_bias: float
+    room_cheap_power_radiator_setback_extra_c: float
     anti_short_cycle_min: float
     quick_start_deficit_c: float
     start_deficit_c: float
@@ -2828,6 +2836,33 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         else (DEFAULT_GARAGE_ROOM_START_DEFICIT_C if garage_room else base_start_deficit)
                     )
 
+                adjacent_rooms_cfg = room_cfg.get(CONF_ROOM_ADJACENT_ROOMS, [])
+                if not isinstance(adjacent_rooms_cfg, list):
+                    adjacent_rooms_cfg = []
+                adjacent_rooms = [
+                    str(x).strip() for x in adjacent_rooms_cfg if str(x).strip() and str(x).strip() != name
+                ]
+                room_direction_bias = float(
+                    room_cfg.get(
+                        CONF_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+                        cfg.get(
+                            CONF_HEAT_SOURCE_DIRECTION_BIAS,
+                            DEFAULT_ROOM_HEAT_SOURCE_DIRECTION_BIAS,
+                        ),
+                    )
+                )
+                room_direction_bias = max(-2.0, min(2.0, room_direction_bias))
+                room_setback_extra = float(
+                    room_cfg.get(
+                        CONF_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                        cfg.get(
+                            CONF_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                            DEFAULT_ROOM_CHEAP_POWER_RADIATOR_SETBACK_EXTRA_C,
+                        ),
+                    )
+                )
+                room_setback_extra = max(0.0, min(4.0, room_setback_extra))
+
                 rooms.append(
                     RoomSnapshot(
                         name=name,
@@ -2862,6 +2897,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         heat_pump_power_w=heat_pump_power_w,
                         radiators=radiator_entities,
                         link_group=str(room_cfg.get(CONF_ROOM_LINK_GROUP, DEFAULT_ROOM_LINK_GROUP)).strip().lower(),
+                        adjacent_rooms=adjacent_rooms,
+                        room_heat_source_direction_bias=room_direction_bias,
+                        room_cheap_power_radiator_setback_extra_c=room_setback_extra,
                         anti_short_cycle_min=float(
                             room_cfg.get(CONF_ROOM_ANTI_SHORT_CYCLE_MIN, DEFAULT_ROOM_ANTI_SHORT_CYCLE_MIN)
                         ),
@@ -3512,6 +3550,13 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         actions.append(
                             f"Lav AI-konfidens ({round(self._ai_confidence,1)}% < {round(confidence_threshold,1)}%)"
                         )
+                    adjacent_to_heat_pump: set[str] = set()
+                    for hp_room in rooms:
+                        if not hp_room.heat_pump:
+                            continue
+                        for nm in hp_room.adjacent_rooms:
+                            adjacent_to_heat_pump.add(str(nm).strip().lower())
+
                     for room in rooms:
                         if not room.room_enabled:
                             actions.append(f"{room.name}: AI rumstyring er slået fra")
@@ -3741,9 +3786,18 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             effective_deficit = max(effective_deficit, comfort_effective_gap)
                         learn_start_offset = float(rt.get("learn_start_offset", 0.0))
                         learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
-                        direction_bias_active = heat_source_direction_bias if cheap_hp_bias_active else 0.0
+                        effective_room_direction_bias = (
+                            room.room_heat_source_direction_bias if cheap_hp_bias_active else 0.0
+                        )
                         room_hp_priority_factor = (
-                            max(0.5, min(2.5, heat_pump_cheap_priority_factor + (direction_bias_active * 0.4)))
+                            max(
+                                0.5,
+                                min(
+                                    2.5,
+                                    heat_pump_cheap_priority_factor
+                                    + (effective_room_direction_bias * 0.4),
+                                ),
+                            )
                             if room.heat_pump
                             else 1.0
                         )
@@ -4012,12 +4066,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if room.heat_pump:
                             room_radiator_setback = radiator_setback
                             if cheap_hp_bias_active:
-                                direction_bonus = max(0.0, heat_source_direction_bias) * 0.8
-                                direction_penalty = max(0.0, -heat_source_direction_bias) * 0.8
+                                direction_bonus = max(0.0, room.room_heat_source_direction_bias) * 0.8
+                                direction_penalty = max(0.0, -room.room_heat_source_direction_bias) * 0.8
                                 room_radiator_setback = max(
                                     0.0,
                                     radiator_setback
-                                    + cheap_power_radiator_setback_extra_c
+                                    + room.room_cheap_power_radiator_setback_extra_c
                                     + (room_hp_priority_factor - 1.0) * 1.5
                                     + direction_bonus
                                     - direction_penalty,
@@ -4036,6 +4090,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         else:
                             # Rooms without heat pump should maintain room target directly.
                             rad_target = round(max(7.0, min(25.0, room.target)), decimals)
+                            if cheap_hp_bias_active and str(room.name).strip().lower() in adjacent_to_heat_pump:
+                                adjacency_setback = (
+                                    max(0.0, room.room_cheap_power_radiator_setback_extra_c * 0.6)
+                                    + max(0.0, room.room_heat_source_direction_bias) * 0.5
+                                )
+                                if room.deficit <= 0.3 and adjacency_setback > 0.0:
+                                    rad_target = round(max(7.0, min(25.0, room.target - adjacency_setback)), decimals)
+                                    actions.append(
+                                        f"{room.name}: nabo-til-varmepumpe, radiator saenket ({rad_target}C)"
+                                    )
                         if thermostat_handover:
                             if room.heat_pump:
                                 # Gas/thermostat takeover: raise radiator to room target for stable comfort.
