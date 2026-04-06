@@ -126,7 +126,8 @@
           "openclaw_bridge_url": "OpenClaw bridge URL (avanceret)",
           "openclaw_timeout_sec": "OpenClaw timeout (sekunder)",
           "openclaw_payload_profile": "OpenClaw payload-profil",
-          "provider_payload_profile": "Provider payload-profil"
+          "provider_payload_profile": "Provider payload-profil",
+          "heat_pump_cheap_priority_factor": "Varmepumpe prioritet ved billig stroem (faktor)"
         }
       }
     }

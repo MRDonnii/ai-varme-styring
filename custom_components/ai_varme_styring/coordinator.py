@@ -58,6 +58,7 @@ from .const import (
     CONF_HUMIDITY_DRY_THRESHOLD,
     CONF_HUMIDITY_HUMID_THRESHOLD,
     CONF_HUMIDITY_MAX_OFFSET_C,
+    CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     CONF_OLLAMA_HOST,
     CONF_OUTDOOR_TEMP_SENSOR,
     CONF_OPENCLAW_ENABLED,
@@ -129,6 +130,7 @@ from .const import (
     DEFAULT_HUMIDITY_DRY_THRESHOLD,
     DEFAULT_HUMIDITY_HUMID_THRESHOLD,
     DEFAULT_HUMIDITY_MAX_OFFSET_C,
+    DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     DEFAULT_OPENCLAW_ENABLED,
     DEFAULT_OPENCLAW_BRIDGE_URL,
     DEFAULT_OPENCLAW_MODEL_FALLBACK,
@@ -2907,6 +2909,13 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             legacy_conflicts = _legacy_automation_conflicts(self.hass)
             price_margin = float(cfg.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN))
             price_awareness = bool(cfg.get(CONF_ENABLE_PRICE_AWARENESS, True))
+            heat_pump_cheap_priority_factor = float(
+                cfg.get(
+                    CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                    DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                )
+            )
+            heat_pump_cheap_priority_factor = max(0.5, min(2.5, heat_pump_cheap_priority_factor))
             # Prefer legacy heat-price sensors when present (COP + boiler-efficiency aware):
             # - sensor.varmepris_varmepumpe
             # - sensor.varmepris_gasfyr
@@ -3062,6 +3071,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "estimated_daily_savings": estimated_daily_savings,
                             "estimated_monthly_savings": estimated_monthly_savings,
                             "price_awareness": price_awareness,
+                            "heat_pump_cheap_priority_factor": round(heat_pump_cheap_priority_factor, 2),
                         },
                         "max_deficit": round(max_deficit, 2),
                         "max_surplus": round(max_surplus, 2),
@@ -3397,6 +3407,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 try:
                     allow_heat_pumps = (not price_awareness) or heat_pump_cheaper
                     thermostat_handover = bool(price_awareness and not allow_heat_pumps)
+                    cheap_hp_bias_active = bool(price_awareness and heat_pump_cheaper)
                     low_confidence = self._ai_confidence < confidence_threshold
                     if low_confidence:
                         actions.append(
@@ -3631,8 +3642,24 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             effective_deficit = max(effective_deficit, comfort_effective_gap)
                         learn_start_offset = float(rt.get("learn_start_offset", 0.0))
                         learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
-                        start_threshold = max(0.0, room.start_deficit_c + learn_start_offset)
-                        stop_threshold = max(0.0, room.stop_surplus_c + learn_stop_offset)
+                        room_hp_priority_factor = (
+                            heat_pump_cheap_priority_factor
+                            if (cheap_hp_bias_active and room.heat_pump)
+                            else 1.0
+                        )
+                        start_threshold = max(
+                            0.0,
+                            (room.start_deficit_c + learn_start_offset) / max(0.5, room_hp_priority_factor),
+                        )
+                        stop_threshold = max(
+                            0.0,
+                            (room.stop_surplus_c + learn_stop_offset)
+                            * max(0.5, 1.0 + 0.4 * (room_hp_priority_factor - 1.0)),
+                        )
+                        quick_start_threshold = max(
+                            0.05,
+                            room.quick_start_deficit_c / max(0.5, room_hp_priority_factor),
+                        )
                         prolonged_deficit_min = 20.0
                         comfort_deficit_threshold = 0.1
                         effective_start_threshold = start_threshold
@@ -3720,7 +3747,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             hp_room_offset = max(hp_room_offset, 0.0)
                         last_switch = rt.get("last_switch")
                         if allow_start:
-                            if _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min and effective_deficit < room.quick_start_deficit_c:
+                            if _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min and effective_deficit < quick_start_threshold:
                                 allow_start = False
             
                         if room.heat_pump:
@@ -3883,12 +3910,18 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 )
             
                         if room.heat_pump:
+                            room_radiator_setback = radiator_setback
+                            if cheap_hp_bias_active:
+                                room_radiator_setback = max(
+                                    0.0,
+                                    radiator_setback + (room_hp_priority_factor - 1.0) * 1.5,
+                                )
                             rad_target = round(
                                 max(
                                     7.0,
                                     min(
                                         25.0,
-                                        (room.target - radiator_setback)
+                                        (room.target - room_radiator_setback)
                                         + (radiator_boost if (room.deficit > 0 and linked_hot) else 0),
                                     ),
                                 ),
@@ -4163,6 +4196,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "estimated_daily_savings": estimated_daily_savings,
                 "estimated_monthly_savings": estimated_monthly_savings,
                 "price_awareness": price_awareness,
+                "heat_pump_cheap_priority_factor": round(heat_pump_cheap_priority_factor, 2),
                 "thermostat_handover": thermostat_handover,
                 "sensor_error": sensor_error,
                 "legacy_conflicts": legacy_conflicts,
@@ -4219,6 +4253,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             fallback.setdefault("provider_error_state", False)
             fallback.setdefault("sensor_error", False)
             fallback.setdefault("thermostat_handover", False)
+            fallback.setdefault("heat_pump_cheap_priority_factor", DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR)
             fallback.setdefault("opening_active", False)
             fallback.setdefault("presence_eco_active", False)
             fallback.setdefault("flow_limited", False)

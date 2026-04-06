@@ -2,6 +2,20 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.13
+
+Date: 2026-04-06
+
+### Added
+- **Adjustable heat-pump priority when electricity is cheap**:
+  - new setting `heat_pump_cheap_priority_factor` (0.5 to 2.5, default 1.0)
+  - when price awareness is active and heat pump is the cheapest source, higher factor now:
+    - lowers heat-pump start thresholds (starts earlier)
+    - lowers quick-start anti-short-cycle threshold (reacts faster)
+    - increases stop-surplus threshold (stays in heat/coast longer)
+    - increases radiator setback in heat-pump rooms to shift more load to AC
+  - current factor is exposed in runtime status payload as `heat_pump_cheap_priority_factor`
+
 ## v0.3.12
 
 Date: 2026-04-05
