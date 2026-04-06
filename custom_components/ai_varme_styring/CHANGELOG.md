@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.19
+
+Date: 2026-04-06
+
+### Fixed
+- **Radiator cap in cheap-power heat-pump bias**:
+  - when cheap-power heat-pump bias is active in rooms with heat pumps, radiator target is now hard-capped below room target
+  - prevents cases where radiator setpoints could end up at or above room target (for example 22.5 when room target is 22.0)
+  - cap strength scales slightly with positive room heat-source bias
+
 ## v0.3.18
 
 Date: 2026-04-06

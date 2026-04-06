@@ -4127,6 +4127,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     actions.append(
                                         f"{room.name}: komfortmode -> radiator assist til AI-mål ({rad_target}°C)"
                                     )
+                        # In cheap-power heat-pump bias, keep radiator below room target in HP rooms.
+                        if cheap_hp_bias_active and room.heat_pump:
+                            min_hp_setback = max(
+                                0.5,
+                                0.5 + (max(0.0, room.room_heat_source_direction_bias) * 0.3),
+                            )
+                            hp_radiator_cap = round(max(7.0, min(25.0, room.target - min_hp_setback)), decimals)
+                            if rad_target > hp_radiator_cap:
+                                rad_target = hp_radiator_cap
+                                actions.append(
+                                    f"{room.name}: billig strom HP-cap -> radiator {rad_target}C"
+                                )
+
                         if eco_room_enabled and rt.get("eco_active", False):
                             hard_floor = room.eco_target - 1.2
                             if room.temperature < hard_floor:
