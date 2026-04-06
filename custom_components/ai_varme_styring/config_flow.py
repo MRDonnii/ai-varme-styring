@@ -45,6 +45,7 @@ from .const import (
     CONF_HUMIDITY_DRY_THRESHOLD,
     CONF_HUMIDITY_HUMID_THRESHOLD,
     CONF_HUMIDITY_MAX_OFFSET_C,
+    CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     CONF_NAME,
     CONF_OPENCLAW_ENABLED,
     CONF_OPENCLAW_BRIDGE_URL,
@@ -123,6 +124,7 @@ from .const import (
     DEFAULT_HUMIDITY_DRY_THRESHOLD,
     DEFAULT_HUMIDITY_HUMID_THRESHOLD,
     DEFAULT_HUMIDITY_MAX_OFFSET_C,
+    DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
     DEFAULT_NAME,
     DEFAULT_OPENCLAW_ENABLED,
     DEFAULT_OPENCLAW_BRIDGE_URL,
@@ -461,6 +463,15 @@ def _base_schema(defaults: dict[str, Any]) -> vol.Schema:
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=5, step=0.01, mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Required(
+                CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                default=defaults.get(
+                    CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                    DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=2.5, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
             vol.Optional(
                 CONF_START_DEFICIT_C,
                 default=defaults.get(CONF_START_DEFICIT_C, DEFAULT_START_DEFICIT_C),
@@ -723,6 +734,15 @@ def _advanced_options_schema(defaults: dict[str, Any]) -> vol.Schema:
             default=defaults.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN),
         ): selector.NumberSelector(
             selector.NumberSelectorConfig(min=0, max=5, step=0.01, mode=selector.NumberSelectorMode.BOX)
+        ),
+        vol.Required(
+            CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+            default=defaults.get(
+                CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+            ),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0.5, max=2.5, step=0.1, mode=selector.NumberSelectorMode.BOX)
         ),
         vol.Optional(
             CONF_START_DEFICIT_C,
