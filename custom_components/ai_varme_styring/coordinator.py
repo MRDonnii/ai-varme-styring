@@ -59,6 +59,7 @@ from .const import (
     CONF_HUMIDITY_HUMID_THRESHOLD,
     CONF_HUMIDITY_MAX_OFFSET_C,
     CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+    CONF_HEAT_PUMP_CHEAP_FAN_MODE,
     CONF_OLLAMA_HOST,
     CONF_OUTDOOR_TEMP_SENSOR,
     CONF_OPENCLAW_ENABLED,
@@ -131,6 +132,7 @@ from .const import (
     DEFAULT_HUMIDITY_HUMID_THRESHOLD,
     DEFAULT_HUMIDITY_MAX_OFFSET_C,
     DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+    DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
     DEFAULT_OPENCLAW_ENABLED,
     DEFAULT_OPENCLAW_BRIDGE_URL,
     DEFAULT_OPENCLAW_MODEL_FALLBACK,
@@ -1066,8 +1068,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_valid_prices: dict[str, float] = {}
         self._cycle_temperature_commands: dict[str, float] = {}
         self._cycle_hvac_commands: dict[str, str] = {}
+        self._cycle_fan_commands: dict[str, str] = {}
         self._recent_temperature_commands: dict[str, tuple[float, float]] = {}
         self._recent_hvac_commands: dict[str, tuple[str, float]] = {}
+        self._recent_fan_commands: dict[str, tuple[str, float]] = {}
         self._runtime_events: dict[str, float | None] = {
             "enabled_last_changed": None,
             "presence_eco_last_changed": None,
@@ -1913,6 +1917,71 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._recent_hvac_commands[entity_id] = (target_mode, now_ts)
         actions.append(f"{entity_id}: hvac mode sat til {target_mode}")
 
+    def _resolve_preferred_fan_mode(
+        self,
+        entity_id: str,
+        preferred: str,
+    ) -> str | None:
+        state = self.hass.states.get(entity_id)
+        if not state:
+            return None
+        modes_raw = state.attributes.get("fan_modes")
+        if not isinstance(modes_raw, list):
+            return None
+        available = [str(m).lower() for m in modes_raw if str(m).strip()]
+        if not available:
+            return None
+
+        pref = str(preferred or "").strip().lower()
+        if pref == "off":
+            return None
+        if pref in available:
+            return pref
+
+        candidates_map = {
+            "auto": ["auto", "medium", "mid", "high", "max", "turbo", "powerful"],
+            "medium": ["medium", "mid", "med", "high", "auto", "max", "turbo"],
+            "high": ["high", "max", "turbo", "powerful", "medium"],
+            "max": ["max", "turbo", "powerful", "high", "medium"],
+        }
+        for cand in candidates_map.get(pref, []):
+            if cand in available:
+                return cand
+        return None
+
+    async def _async_set_fan_mode_if_needed(
+        self,
+        entity_id: str | None,
+        fan_mode: str | None,
+        actions: list[str],
+    ) -> None:
+        if not entity_id or not fan_mode:
+            return
+        target = str(fan_mode).lower()
+        pending = self._cycle_fan_commands.get(entity_id)
+        if pending == target:
+            return
+        recent = self._recent_fan_commands.get(entity_id)
+        now_ts = dt_util.utcnow().timestamp()
+        if recent and recent[0] == target and (now_ts - float(recent[1])) < 90.0:
+            return
+
+        state = self.hass.states.get(entity_id)
+        current = str((state.attributes if state else {}).get("fan_mode", "")).lower()
+        if current == target:
+            self._cycle_fan_commands[entity_id] = target
+            return
+
+        await self.hass.services.async_call(
+            "climate",
+            "set_fan_mode",
+            {"entity_id": entity_id, "fan_mode": target},
+            blocking=True,
+        )
+        self._cycle_fan_commands[entity_id] = target
+        self._recent_fan_commands[entity_id] = (target, now_ts)
+        actions.append(f"{entity_id}: fan mode sat til {target}")
+
     def _compute_heating_mode_from_rooms(self, rooms: list[RoomSnapshot]) -> str:
         """Summarize current house heating mode from room activity."""
         hp_active = False
@@ -2280,6 +2349,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             self._cycle_temperature_commands = {}
             self._cycle_hvac_commands = {}
+            self._cycle_fan_commands = {}
             try:
                 OPENCLAW_RUNTIME_ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
                 with OPENCLAW_RUNTIME_ERROR_LOG.open("a", encoding="utf-8") as fh:
@@ -2916,6 +2986,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             )
             heat_pump_cheap_priority_factor = max(0.5, min(2.5, heat_pump_cheap_priority_factor))
+            heat_pump_cheap_fan_mode = str(
+                cfg.get(
+                    CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+                    DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
+                )
+            ).strip().lower()
             # Prefer legacy heat-price sensors when present (COP + boiler-efficiency aware):
             # - sensor.varmepris_varmepumpe
             # - sensor.varmepris_gasfyr
@@ -3072,6 +3148,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "estimated_monthly_savings": estimated_monthly_savings,
                             "price_awareness": price_awareness,
                             "heat_pump_cheap_priority_factor": round(heat_pump_cheap_priority_factor, 2),
+                            "heat_pump_cheap_fan_mode": heat_pump_cheap_fan_mode,
                         },
                         "max_deficit": round(max_deficit, 2),
                         "max_surplus": round(max_surplus, 2),
@@ -4254,6 +4331,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             fallback.setdefault("sensor_error", False)
             fallback.setdefault("thermostat_handover", False)
             fallback.setdefault("heat_pump_cheap_priority_factor", DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR)
+            fallback.setdefault("heat_pump_cheap_fan_mode", DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE)
             fallback.setdefault("opening_active", False)
             fallback.setdefault("presence_eco_active", False)
             fallback.setdefault("flow_limited", False)

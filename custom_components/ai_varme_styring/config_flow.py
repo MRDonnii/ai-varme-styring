@@ -46,6 +46,7 @@ from .const import (
     CONF_HUMIDITY_HUMID_THRESHOLD,
     CONF_HUMIDITY_MAX_OFFSET_C,
     CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+    CONF_HEAT_PUMP_CHEAP_FAN_MODE,
     CONF_NAME,
     CONF_OPENCLAW_ENABLED,
     CONF_OPENCLAW_BRIDGE_URL,
@@ -125,6 +126,7 @@ from .const import (
     DEFAULT_HUMIDITY_HUMID_THRESHOLD,
     DEFAULT_HUMIDITY_MAX_OFFSET_C,
     DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+    DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
     DEFAULT_NAME,
     DEFAULT_OPENCLAW_ENABLED,
     DEFAULT_OPENCLAW_BRIDGE_URL,
@@ -170,6 +172,7 @@ from .const import (
     DEFAULT_ROOM_ENABLE_OPENING_PAUSE,
     DOMAIN,
     PAYLOAD_PROFILE_OPTIONS,
+    CHEAP_FAN_MODE_OPTIONS,
 )
 
 
@@ -471,6 +474,18 @@ def _base_schema(defaults: dict[str, Any]) -> vol.Schema:
                 ),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0.5, max=2.5, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+                default=defaults.get(
+                    CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+                    DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=CHEAP_FAN_MODE_OPTIONS,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
             ),
             vol.Optional(
                 CONF_START_DEFICIT_C,
