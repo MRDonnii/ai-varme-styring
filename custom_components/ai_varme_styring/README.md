@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
 
-**Current version: 0.3.7**
+**Current version: 0.3.21**
 
 ## Highlights
 
@@ -15,7 +15,16 @@ Local Home Assistant integration for AI-based heating control with OpenClaw, MQT
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in the upcoming release
+## What is new in v0.3.21
+
+### 0.3.21 control stability and room-link behavior
+
+- Heat-pump rooms now include `room_adjacent_rooms` directly in shared-demand start logic.
+- Stale OpenClaw room mode overrides are now cleared reliably each cycle.
+- Heat-pump overheat/stop decisions now use raw room surplus for better real-world behavior.
+- Opening-pause flow now dampens heat pumps immediately when room temperature is above target.
+- Cheap-power fan preference (`heat_pump_cheap_fan_mode`) is now actively applied during heat/coast control.
+- Shared-demand logic now keeps linked heat pumps active instead of dropping to a passive coast path too early.
 
 ### 1. MQTT-first OpenClaw decision path
 

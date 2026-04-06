@@ -2,6 +2,40 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.21
+
+Date: 2026-04-06
+
+### Fixed
+- **Linked-room heat pump activation**:
+  - heat-pump rooms now include `room_adjacent_rooms` directly in shared-demand evaluation
+  - prevents missed starts where a connected room is under target but the pump room is slightly over target
+
+### Fixed
+- **Stale OpenClaw mode overrides**:
+  - room-level `openclaw_mode_override` values are now cleared when new decisions no longer include that room
+  - prevents old `off`/`eco` mode directives from sticking in runtime state
+
+### Fixed
+- **Heat-pump stop/overheat signal source**:
+  - overheat and stop/coast decisions for heat pumps now use raw room surplus where relevant
+  - reduces false overheat behavior from bias-adjusted values
+
+### Fixed
+- **Opening pause safety behavior**:
+  - during active opening pause, heat pumps are now damped down immediately when room is above target
+  - high overtemperature during opening can now force `OFF` faster instead of waiting for long pause timers
+
+### Improved
+- **Cheap-power fan strategy is now active in control loop**:
+  - `heat_pump_cheap_fan_mode` is now applied during heat/coast actions when heat pumps are cheapest
+  - keeps airflow strategy aligned with heat-pump priority tuning
+
+### Improved
+- **Shared-demand anti-coast handling**:
+  - linked heat pumps now stay in active heat mode with assist setpoint when shared demand exists
+  - avoids premature passive coast in connected-room demand scenarios
+
 ## v0.3.20
 
 Date: 2026-04-06
