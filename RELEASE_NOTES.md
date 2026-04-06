@@ -1,9 +1,11 @@
-Release v0.3.14 - Cheap-power fan priority for heat pumps
+Release v0.3.15 - Easier setup for cheap-power heat pump tuning
 
-New setting:
-- `heat_pump_cheap_fan_mode`: off | auto | medium | high | max
+New options section:
+- Billig strom: varmepumpe-prioritet
 
-Behavior:
-- When electricity is cheap and heat pump priority is active, the integration raises fan mode on supported heat pumps.
-- Outside cheap-power bias windows, it returns fan mode to auto (when fan feature is enabled and supported).
-- Commands are sent only when needed, with cooldown to avoid command spam.
+You can now adjust the key cheap-power tuning fields in one dedicated place:
+- Price awareness
+- Price margin
+- Heat pump cheap priority factor
+- Heat pump cheap fan mode
+- Radiator setback

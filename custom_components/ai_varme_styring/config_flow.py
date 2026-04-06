@@ -829,6 +829,51 @@ def _advanced_options_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(schema)
 
 
+
+def _heat_pump_priority_options_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_ENABLE_PRICE_AWARENESS,
+                default=defaults.get(CONF_ENABLE_PRICE_AWARENESS, DEFAULT_ENABLE_PRICE_AWARENESS),
+            ): bool,
+            vol.Required(
+                CONF_PRICE_MARGIN,
+                default=defaults.get(CONF_PRICE_MARGIN, DEFAULT_PRICE_MARGIN),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=5, step=0.01, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                default=defaults.get(
+                    CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                    DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR,
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=2.5, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+                default=defaults.get(
+                    CONF_HEAT_PUMP_CHEAP_FAN_MODE,
+                    DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE,
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=CHEAP_FAN_MODE_OPTIONS,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_RADIATOR_SETBACK_C,
+                default=defaults.get(CONF_RADIATOR_SETBACK_C, DEFAULT_RADIATOR_SETBACK_C),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=6, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+        }
+    )
+
+
 def _providers_schema(defaults: dict[str, Any]) -> vol.Schema:
     selected = _selected_base_values(defaults)
     schema: dict[Any, Any] = {
@@ -1281,6 +1326,7 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
         actions = [
             {"value": "providers", "label": "AI providers"},
             {"value": "advanced", "label": "Avanceret styring"},
+            {"value": "heat_pump_priority", "label": "Billig strom: varmepumpe-prioritet"},
             {"value": "add_room", "label": "Tilføj rum"},
             {"value": "edit_room", "label": "Rediger rum"},
             {"value": "remove_room", "label": "Fjern rum"},
@@ -1298,6 +1344,8 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
                     return await self.async_step_providers()
                 if action == "advanced":
                     return await self.async_step_advanced()
+                if action == "heat_pump_priority":
+                    return await self.async_step_heat_pump_priority()
                 if action == "add_room":
                     return await self.async_step_room_add()
                 if action == "edit_room":
@@ -1361,6 +1409,21 @@ class AiVarmeStyringOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="advanced",
             data_schema=_advanced_options_schema(_merge_visible_input(self._working_base, user_input or {})),
+            errors={},
+        )
+
+    async def async_step_heat_pump_priority(self, user_input: dict[str, Any] | None = None):
+        self._ensure_state()
+        assert self._working_base is not None
+        if user_input is not None:
+            self._working_base = _merge_visible_input(self._working_base, user_input)
+            return await self.async_step_init()
+
+        return self.async_show_form(
+            step_id="heat_pump_priority",
+            data_schema=_heat_pump_priority_options_schema(
+                _merge_visible_input(self._working_base, user_input or {})
+            ),
             errors={},
         )
 
