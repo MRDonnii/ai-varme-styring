@@ -71,6 +71,7 @@ CONF_FLOW_LIMIT_MARGIN_C: Final = "flow_limit_margin_c"
 CONF_RADIATOR_BOOST_C: Final = "radiator_boost_c"
 CONF_RADIATOR_SETBACK_C: Final = "radiator_setback_c"
 CONF_HEAT_PUMP_CHEAP_PRIORITY_FACTOR: Final = "heat_pump_cheap_priority_factor"
+CONF_HEAT_PUMP_CHEAP_FAN_MODE: Final = "heat_pump_cheap_fan_mode"
 CONF_UPDATE_SECONDS: Final = "update_seconds"
 CONF_DECIMALS: Final = "decimals"
 CONF_AI_PROVIDER: Final = "ai_provider"
@@ -123,6 +124,7 @@ DEFAULT_FLOW_LIMIT_MARGIN_C: Final = 0.2
 DEFAULT_RADIATOR_BOOST_C: Final = 0.8
 DEFAULT_RADIATOR_SETBACK_C: Final = 2.0
 DEFAULT_HEAT_PUMP_CHEAP_PRIORITY_FACTOR: Final = 1.0
+DEFAULT_HEAT_PUMP_CHEAP_FAN_MODE: Final = "off"
 DEFAULT_UPDATE_SECONDS: Final = 60
 DEFAULT_DECIMALS: Final = 1
 DEFAULT_GLOBAL_TARGET_C: Final = 22.0
@@ -205,6 +207,14 @@ PAYLOAD_PROFILE_HEAVY: Final = "heavy"
 PAYLOAD_PROFILE_OPTIONS: Final[list[str]] = [
     PAYLOAD_PROFILE_LIGHT,
     PAYLOAD_PROFILE_HEAVY,
+]
+
+CHEAP_FAN_MODE_OPTIONS: Final[list[str]] = [
+    "off",
+    "auto",
+    "medium",
+    "high",
+    "max",
 ]
 
 RUNTIME_ENABLED: Final = "runtime_enabled"

@@ -2,6 +2,20 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.14
+
+Date: 2026-04-06
+
+### Added
+- **Cheap-power fan priority for heat pumps**:
+  - new setting `heat_pump_cheap_fan_mode` with options: `off`, `auto`, `medium`, `high`, `max`
+  - when cheap-power heat-pump bias is active, integration now requests higher fan mode on supported heat pumps
+  - when cheap-power bias is not active and fan feature is enabled, integration falls back to `auto` when supported
+  - fan-mode changes are throttled and only sent when mode actually changes
+
+### Added
+- **Cheap-power priority tuning from v0.3.13 is now combined with fan control** for stronger load shift toward heat pumps.
+
 ## v0.3.13
 
 Date: 2026-04-06

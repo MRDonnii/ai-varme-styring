@@ -1,12 +1,9 @@
-Release v0.3.13 - Adjustable cheap-power heat pump priority
+Release v0.3.14 - Cheap-power fan priority for heat pumps
 
-New feature:
-- Added `heat_pump_cheap_priority_factor` (0.5-2.5, default 1.0).
+New setting:
+- `heat_pump_cheap_fan_mode`: off | auto | medium | high | max
 
-Behavior when electricity is cheap and price awareness is enabled:
-- Heat pumps start earlier (lower start thresholds).
-- Heat pumps react faster after switch events (lower quick-start threshold).
-- Heat pumps stay in heat/coast longer before stopping (higher stop threshold).
-- Radiator targets are set further below room target in heat-pump rooms to shift more load to AC.
-
-The active factor is now included in status/runtime payloads for diagnostics.
+Behavior:
+- When electricity is cheap and heat pump priority is active, the integration raises fan mode on supported heat pumps.
+- Outside cheap-power bias windows, it returns fan mode to auto (when fan feature is enabled and supported).
+- Commands are sent only when needed, with cooldown to avoid command spam.
