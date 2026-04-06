@@ -2,6 +2,26 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.16
+
+Date: 2026-04-06
+
+### Added
+- **Direction slider for heat source strategy (radiator <-> heat pump)**:
+  - new slider `heat_source_direction_bias` from `-2.0` to `+2.0`
+  - negative values prioritize radiator support
+  - positive values prioritize heat pump usage
+- **Extra radiator reduction at cheap power**:
+  - new setting `cheap_power_radiator_setback_extra_c` to lower radiator targets further when cheap-power heat-pump bias is active
+- **Clear grouped setup** in `Billig strom: varmepumpe-prioritet` with explicit direction description
+
+### Changed
+- Cheap-power control now combines:
+  - `heat_pump_cheap_priority_factor`
+  - `heat_source_direction_bias`
+  - `cheap_power_radiator_setback_extra_c`
+  to tune start/stop behavior and radiator setback in one coherent strategy.
+
 ## v0.3.15
 
 Date: 2026-04-06
