@@ -119,6 +119,17 @@
           "gemini_model_report": "Gemini rapport model"
         }
       },
+      "heat_pump_priority": {
+        "title": "Billig strom: Varmepumpe-prioritet",
+        "description": "Juster hvor aggressivt varmepumper prioriteres ved billig strom, inkl. fan-mode og radiator-setback.",
+        "data": {
+          "enable_price_awareness": "Aktiver prisbevidst styring",
+          "price_margin": "Pris-margin for skift",
+          "heat_pump_cheap_priority_factor": "Varmepumpe prioritet ved billig stroem (faktor)",
+          "heat_pump_cheap_fan_mode": "Varmepumpe fan-prioritet ved billig stroem",
+          "radiator_setback_c": "Radiator setback (grader)"
+        }
+      },
       "advanced": {
         "title": "Avanceret styring",
         "description": "Finjuster PID, tærskler og tekniske grænser. De fleste kan lade denne side stå som standard.",

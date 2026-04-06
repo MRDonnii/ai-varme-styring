@@ -2,6 +2,21 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.15
+
+Date: 2026-04-06
+
+### Added
+- **Dedicated setup section for cheap-power heat-pump tuning**:
+  - new options menu entry: `Billig strom: varmepumpe-prioritet`
+  - groups key fields in one place:
+    - `enable_price_awareness`
+    - `price_margin`
+    - `heat_pump_cheap_priority_factor`
+    - `heat_pump_cheap_fan_mode`
+    - `radiator_setback_c`
+  - makes tuning easier without digging through generic advanced settings
+
 ## v0.3.14
 
 Date: 2026-04-06
