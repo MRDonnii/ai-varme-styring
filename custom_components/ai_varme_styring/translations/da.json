@@ -127,8 +127,6 @@
           "price_margin": "Pris-margin for skift",
           "heat_pump_cheap_priority_factor": "Varmepumpe prioritet ved billig stroem (faktor)",
           "heat_pump_cheap_fan_mode": "Varmepumpe fan-prioritet ved billig stroem",
-          "heat_source_direction_bias": "Retning: radiator (-) <-> varmepumpe (+)",
-          "cheap_power_radiator_setback_extra_c": "Ekstra radiator-nedsaetning ved billig stroem",
           "radiator_setback_c": "Radiator setback (grader)"
         }
       },

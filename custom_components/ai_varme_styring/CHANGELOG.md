@@ -2,6 +2,22 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.18
+
+Date: 2026-04-06
+
+### Changed
+- `room_link_group` is now editable as a selectable field in room edit:
+  - can choose existing room/group values
+  - can clear it to remove link
+  - can type a new group id directly
+- Heat source direction slider is now room-first:
+  - kept in room edit where day-to-day tuning happens
+  - removed from the dedicated cheap-power settings section to avoid duplicate tuning locations
+
+### Improved
+- Room save flow now normalizes link-group values and keeps adjacent-room selections stable.
+
 ## v0.3.17
 
 Date: 2026-04-06
