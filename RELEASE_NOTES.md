@@ -1,9 +1,7 @@
-Release v0.3.18 - Better room-level tuning UX
+Release v0.3.19 - Radiator hard-cap under cheap-power heat pump bias
 
-What changed:
-- `room_link_group` is now a selectable room-edit field with existing choices and custom value support.
-- You can remove a link group by choosing blank (Ingen).
-- Heat-source direction slider is now focused in room edit (not duplicated in generic settings).
+Fix:
+- In cheap-power heat-pump bias, radiator targets in heat-pump rooms are now capped below room target.
 
 Result:
-- Easier per-room tuning where you already edit finished rooms.
+- Prevents radiator setpoints from landing above/at target in those rooms while trying to shift load to heat pumps.
