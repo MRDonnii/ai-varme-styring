@@ -1,6 +1,8 @@
 # OpenClaw MQTT Setup Guide
 
-This guide describes the public, reproducible setup for OpenClaw-based heating decisions that end up in Home Assistant through MQTT.
+This guide is kept for legacy installations that still deliver OpenClaw heating decisions through MQTT.
+
+For new setups, the recommended path is now `OpenClaw Conversation` directly inside Home Assistant.
 
 ## Goal
 
