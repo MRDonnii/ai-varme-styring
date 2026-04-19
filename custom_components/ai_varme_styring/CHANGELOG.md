@@ -2,6 +2,32 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.22
+
+Date: 2026-04-19
+
+### Changed
+- **OpenClaw is now conversation-first**:
+  - AI Varme Styring now uses the `openclaw_conversation` agent path as the primary OpenClaw decision flow
+  - heating decisions no longer depend on MQTT delivery as the normal path
+  - decision source and transport are exposed clearly as `OpenClaw conversation` / `openclaw_conversation_agent`
+
+### Improved
+- **Price-aware OpenClaw payload for cost-saving decisions**:
+  - OpenClaw conversation payloads now include runtime and price context such as cheapest heat source, alternative price, and estimated savings
+  - this lets the decision agent actively optimize for lower heating cost instead of reasoning without price data
+
+### Improved
+- **AI report readability and Danish text stability**:
+  - report output is now structured into clearer sections like `Kort resume`, `Aktiv beslutning`, `Kontekst`, and `Rum-beslutninger`
+  - report attributes and room lines now clean mojibake-prone text so Danish characters render correctly in Home Assistant cards
+
+### Fixed
+- **Reduced unnecessary AI-driven setpoint and mode churn**:
+  - small OpenClaw room overrides are now held back for a stabilization window before new commands are sent
+  - tiny target changes are ignored, and non-urgent mode flips are delayed
+  - this reduces unnecessary heat-pump beeps and repeated state flips
+
 ## v0.3.21
 
 Date: 2026-04-06

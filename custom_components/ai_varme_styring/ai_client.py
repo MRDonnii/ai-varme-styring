@@ -13,7 +13,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from custom_components.openclaw_conversation.conversation import (
+    OpenClawConversationAgent,
+)
 
 from .const import (
     AI_ENGINE_NONE,
@@ -22,6 +27,8 @@ from .const import (
 )
 
 LOGGER = logging.getLogger(__name__)
+OPENCLAW_CONVERSATION_DOMAIN = "openclaw_conversation"
+OPENCLAW_CONVERSATION_SERVICE = "process_decision"
 OPENCLAW_RUNTIME_TMP_DIR = Path(
     os.environ.get("OPENCLAW_RUNTIME_TMP_DIR", "/config/custom_components/ai_varme_styring/runtime/tmp")
 )
@@ -79,6 +86,10 @@ OPENCLAW_REPLY_TOPIC = os.environ.get(
     "OPENCLAW_REPLY_TOPIC",
     "homeassistant/ai_varme/openclaw/decision",
 ).strip() or "homeassistant/ai_varme/openclaw/decision"
+OPENCLAW_HEATING_CONVERSATION_ID = os.environ.get(
+    "OPENCLAW_HEATING_CONVERSATION_ID",
+    "webchat:agent-heating-hook-heating",
+).strip() or "webchat:agent-heating-hook-heating"
 OPENCLAW_REQUEST_RE = re.compile(
     r"\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\b",
     re.I,
@@ -215,7 +226,56 @@ class AiProviderClient:
 
     def __init__(self, hass) -> None:
         self.hass = hass
+        self._openclaw_conversation_agent: OpenClawConversationAgent | None = None
+        self._openclaw_conversation_entry_id: str | None = None
         self._debug_openclaw({"stage": "client_init"})
+
+    def _get_openclaw_conversation_entry(self) -> ConfigEntry:
+        entries = self.hass.config_entries.async_entries(OPENCLAW_CONVERSATION_DOMAIN)
+        if not entries:
+            raise RuntimeError("OpenClaw conversation integration is not configured")
+        return entries[0]
+
+    def _get_openclaw_conversation_agent(self) -> OpenClawConversationAgent:
+        entry = self._get_openclaw_conversation_entry()
+        if (
+            self._openclaw_conversation_agent is None
+            or self._openclaw_conversation_entry_id != entry.entry_id
+        ):
+            self._openclaw_conversation_agent = OpenClawConversationAgent(
+                self.hass,
+                entry,
+            )
+            self._openclaw_conversation_entry_id = entry.entry_id
+        return self._openclaw_conversation_agent
+
+    def _has_openclaw_conversation_agent(self) -> bool:
+        try:
+            self._get_openclaw_conversation_entry()
+        except Exception:
+            return False
+        return True
+
+    async def _async_call_openclaw_conversation(
+        self,
+        *,
+        prompt: str,
+        timeout_sec: float,
+    ) -> tuple[str, dict[str, Any]]:
+        """Call OpenClaw through the configured conversation agent."""
+        del timeout_sec
+        agent = self._get_openclaw_conversation_agent()
+        conversation_id = str(uuid.uuid4())
+        raw_text = await agent._call_openclaw(
+            prompt,
+            conversation_id,
+            {"user_id": "", "device_id": ""},
+        )
+        meta = {
+            "conversation_id": conversation_id,
+            "transport": "openclaw_conversation_agent",
+        }
+        return str(raw_text or "").strip(), meta
 
     def _debug_openclaw(self, payload: dict[str, Any]) -> None:
         if not OPENCLAW_DEBUG_ENABLED:
@@ -289,6 +349,12 @@ class AiProviderClient:
                 "}"
                 "} "
                 "Rules: "
+                "Primary objective: minimize heating cost while keeping rooms acceptably comfortable. "
+                "Use the payload price signals, cheapest_heat_source, heat_pump_cheaper, cheapest_alt_name, cheapest_alt_price and estimated_savings_per_kwh actively in the decision. "
+                "If one heat source is cheaper, prefer decisions that lean on that source unless a room would otherwise be left meaningfully under target or comfort need would be missed. "
+                "If rooms are already above target, prefer saving money over adding more heat. "
+                "Do not recommend extra heating just because a room is close to target when it is already heating or already warm enough. "
+                "When the payload indicates expensive heating relative to alternatives, be conservative and reduce/offload heat unless there is a clear comfort deficit. "
                 "Be factually consistent with the payload. "
                 "If any room has deficit > 0.05 C, do not say that all rooms are at or above target. "
                 "If any room has comfort_gap > deficit by more than 0.05 C, mention humidity or perceived comfort explicitly. "
@@ -333,108 +399,40 @@ class AiProviderClient:
                     "timeout_sec": float(openclaw_timeout_sec),
                 }
             )
-            # Prefer the shared-file queue path for OpenClaw decisions.
-            # It lets the host-side bridge own completion delivery and avoids
-            # HA-runtime session polling issues when the session directory is
-            # unavailable or slow to reflect new runs.
-            if OPENCLAW_QUEUE_ENABLED:
-                try:
-                    text, queue_source, queue_meta = await self._async_call_openclaw_queue(
-                        payload=payload_openclaw,
-                        ollama_endpoint=ollama_endpoint,
-                        ollama_model=ollama_model,
-                        timeout_sec=float(openclaw_timeout_sec),
-                        openclaw_model_preferred=openclaw_model_preferred,
-                        openclaw_model_fallback=openclaw_model_fallback,
-                    )
-                    data = self._extract_json(text)
-                    if queue_meta:
-                        data["_openclaw_meta"] = queue_meta
-                    factor, reason, confidence = self._validate_decision_factor(data)
-                    factor, reason, confidence, data = self._reconcile_reason_with_payload(payload_openclaw, factor, reason, confidence, data)
-                    self._debug_openclaw({"stage": "try_openclaw_queue_ok", "source": queue_source, "meta": queue_meta})
-                    return factor, reason, confidence, f"openclaw_queue:{queue_source}", data
-                except Exception as err:  # noqa: BLE001
-                    self._debug_openclaw({"stage": "try_openclaw_queue_error", "error": str(err)})
-                    LOGGER.warning("OpenClaw queue path failed, trying next path: %s", err)
-            else:
-                self._debug_openclaw(
-                    {
-                        "stage": "try_openclaw_queue_skipped",
-                        "reason": "queue_disabled",
-                        "queue_wait_budget_sec": self._openclaw_queue_wait_budget(float(openclaw_timeout_sec)),
-                    }
+            try:
+                text, service_meta = await self._async_call_openclaw_conversation(
+                    prompt=openclaw_prompt,
+                    timeout_sec=float(openclaw_timeout_sec),
                 )
-            openclaw_request_id = str(uuid.uuid4())
-            if OPENCLAW_DIRECT_FIRST and openclaw_enabled and str(openclaw_url).strip():
-                try:
-                    text = await self._async_call_openclaw(
-                        url=openclaw_url,
-                        token=openclaw_token,
-                        password=openclaw_password,
-                        prompt=_build_prompt(payload_openclaw, openclaw_request_id),
-                        timeout_sec=float(openclaw_timeout_sec),
-                        context_payload=payload_openclaw,
-                        request_id=openclaw_request_id,
-                    )
-                    data = self._extract_json(text)
-                    factor, reason, confidence = self._validate_decision_factor(data)
-                    factor, reason, confidence, data = self._reconcile_reason_with_payload(
-                        payload_openclaw, factor, reason, confidence, data
-                    )
-                    self._debug_openclaw({"stage": "try_openclaw_direct_inline_ok"})
-                    return factor, reason, confidence, "openclaw_inline", data
-                except Exception as err:  # noqa: BLE001
-                    self._debug_openclaw({"stage": "try_openclaw_direct_inline_error", "error": str(err)})
-                    LOGGER.warning("OpenClaw direct inline path failed, trying next path: %s", err)
-            if OPENCLAW_USE_BRIDGE and str(openclaw_bridge_url).strip():
-                try:
-                    text, bridge_source, bridge_meta = await self._async_call_openclaw_bridge(
-                        url=openclaw_bridge_url,
-                        token=openclaw_token,
-                        payload=payload_openclaw,
-                        ollama_endpoint=ollama_endpoint,
-                        ollama_model=ollama_model,
-                        timeout_sec=float(openclaw_timeout_sec),
-                        openclaw_model_preferred=openclaw_model_preferred,
-                        openclaw_model_fallback=openclaw_model_fallback,
-                    )
-                    data = self._extract_json(text)
-                    if bridge_meta:
-                        data["_openclaw_meta"] = bridge_meta
-                    factor, reason, confidence = self._validate_decision_factor(data)
-                    factor, reason, confidence, data = self._reconcile_reason_with_payload(payload_openclaw, factor, reason, confidence, data)
-                    self._debug_openclaw({"stage": "try_openclaw_bridge_ok", "source": bridge_source, "meta": bridge_meta})
-                    return factor, reason, confidence, f"openclaw_bridge:{bridge_source}", data
-                except Exception as err:  # noqa: BLE001
-                    self._debug_openclaw({"stage": "try_openclaw_bridge_error", "error": str(err)})
-                    LOGGER.warning("OpenClaw bridge path failed, trying direct session path: %s", err)
-            elif str(openclaw_bridge_url).strip():
-                self._debug_openclaw(
-                    {
-                        "stage": "try_openclaw_bridge_skipped",
-                        "reason": "bridge_disabled_by_env",
+                data = self._extract_json(text)
+                if isinstance(data, dict) and service_meta:
+                    data["_openclaw_meta"] = {
+                        **(
+                            data.get("_openclaw_meta", {})
+                            if isinstance(data.get("_openclaw_meta"), dict)
+                            else {}
+                        ),
+                        **service_meta,
                     }
+                factor, reason, confidence = self._validate_decision_factor(data)
+                factor, reason, confidence, data = self._reconcile_reason_with_payload(
+                    payload_openclaw,
+                    factor,
+                    reason,
+                    confidence,
+                    data,
                 )
-            request_id = openclaw_request_id
-            text, meta = await self._async_call_openclaw_with_session(
-                url=openclaw_url,
-                token=openclaw_token,
-                password=openclaw_password,
-                prompt=_build_prompt(payload_openclaw, request_id),
-                timeout_sec=float(openclaw_timeout_sec),
-                request_id=request_id,
-                context_payload=payload_openclaw,
-                openclaw_model_preferred=openclaw_model_preferred,
-                openclaw_model_fallback=openclaw_model_fallback,
-            )
-            data = self._extract_json(text)
-            if meta:
-                data["_openclaw_meta"] = meta
-            factor, reason, confidence = self._validate_decision_factor(data)
-            factor, reason, confidence, data = self._reconcile_reason_with_payload(payload_openclaw, factor, reason, confidence, data)
-            self._debug_openclaw({"stage": "try_openclaw_direct_ok", "meta": meta})
-            return factor, reason, confidence, "openclaw_session", data
+                self._debug_openclaw(
+                    {"stage": "try_openclaw_conversation_ok", "meta": service_meta}
+                )
+                return factor, reason, confidence, "openclaw_conversation", data
+            except Exception as err:  # noqa: BLE001
+                self._debug_openclaw(
+                    {"stage": "try_openclaw_conversation_error", "error": str(err)}
+                )
+                raise RuntimeError(
+                    f"OpenClaw conversation service path failed: {err}"
+                ) from err
 
         async def _try_ollama() -> tuple[float, str, float, str, dict[str, Any]]:
             text = await self._async_call_ollama(
@@ -459,7 +457,8 @@ class AiProviderClient:
             try:
                 if source == "openclaw":
                     if not (
-                        str(openclaw_bridge_url).strip()
+                        self._has_openclaw_conversation_agent()
+                        or str(openclaw_bridge_url).strip()
                         or (openclaw_enabled and str(openclaw_url).strip())
                     ):
                         continue
@@ -475,14 +474,6 @@ class AiProviderClient:
             except Exception as err:  # noqa: BLE001
                 last_engine_error[source] = str(err)
                 LOGGER.warning("%s decision failed, fallback chain continues: %s", source, err)
-
-        mqtt_decision = self._mqtt_sensor_decision()
-        if isinstance(mqtt_decision, dict):
-            try:
-                factor, reason, confidence = self._validate_decision_factor(mqtt_decision)
-                return factor, reason, confidence, "openclaw_mqtt_sensor", mqtt_decision
-            except Exception as err:  # noqa: BLE001
-                last_engine_error["openclaw_mqtt_sensor"] = str(err)
 
         if last_good is not None:
             try:
@@ -611,6 +602,22 @@ class AiProviderClient:
         source_context.setdefault("type", "heating_decision")
         source_context.setdefault("reply_transport", OPENCLAW_REPLY_TRANSPORT)
         source_context.setdefault("reply_topic", OPENCLAW_REPLY_TOPIC)
+        conversation_id = (
+            str(source_context.get("conversation_id") or "").strip()
+            or str(source_context.get("thread_id") or "").strip()
+            or str(source_context.get("session_id") or "").strip()
+            or str(OPENCLAW_HEATING_CONVERSATION_ID or "").strip()
+        )
+        if conversation_id:
+            # OpenClaw runtimes are not fully uniform about the field name they
+            # inspect for "continue the same conversation", so send the stable id
+            # under a few common aliases.
+            source_context.setdefault("conversation_id", conversation_id)
+            source_context.setdefault("thread_id", conversation_id)
+            source_context.setdefault("session_id", conversation_id)
+            source_context.setdefault("conversationId", conversation_id)
+            source_context.setdefault("threadId", conversation_id)
+            source_context.setdefault("sessionId", conversation_id)
 
         body: dict[str, Any] = dict(source_context)
         # Some OpenClaw runtimes only inspect nested context/input objects.
@@ -935,7 +942,8 @@ class AiProviderClient:
             return None
 
         attrs = dict(state.attributes or {})
-        raw = attrs.get("raw") if isinstance(attrs.get("raw"), dict) else {}
+        raw_attr = attrs.get("raw")
+        raw = raw_attr if isinstance(raw_attr, dict) else {}
         payload = raw if raw else attrs
         if not isinstance(payload, dict):
             return None
@@ -950,7 +958,14 @@ class AiProviderClient:
             return None
 
         age_sec: float | None = None
-        ts_text = payload.get("ts_utc") or attrs.get("ts_utc")
+        payload_context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+        ts_text = (
+            payload.get("ts_utc")
+            or payload.get("timestamp_utc")
+            or payload_context.get("timestamp_utc")
+            or attrs.get("ts_utc")
+            or attrs.get("timestamp_utc")
+        )
         if isinstance(ts_text, str) and ts_text.strip():
             ts_value = ts_text.strip()
             if ts_value.endswith("Z"):
@@ -990,7 +1005,13 @@ class AiProviderClient:
                 "entity_id": entity_id,
                 "request_id": payload.get("request_id") or attrs.get("request_id"),
                 "run_id": payload.get("run_id") or attrs.get("run_id"),
-                "ts_utc": payload.get("ts_utc") or attrs.get("ts_utc"),
+                "ts_utc": (
+                    payload.get("ts_utc")
+                    or payload.get("timestamp_utc")
+                    or payload_context.get("timestamp_utc")
+                    or attrs.get("ts_utc")
+                    or attrs.get("timestamp_utc")
+                ),
                 "age_sec": round(float(age_sec), 2) if isinstance(age_sec, (int, float)) else None,
             },
         }
