@@ -17,6 +17,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .entity import AiVarmeBaseEntity
 
+_MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e2", "\ufffd")
+
 
 def _num_or_zero(value: Any, decimals: int = 1) -> float:
     """Return numeric value, or 0.0 for missing/invalid input."""
@@ -80,10 +82,64 @@ def _payload_summary(payload: Any) -> dict[str, Any]:
 
 
 def _display_engine(value: Any, default: str = "Ingen") -> str:
-    text = str(value or "").strip()
+    text = _fix_mojibake_text(str(value or "").strip())
     if not text or text.lower() == "none":
         return default
     return text
+
+
+def _mojibake_score(text: str) -> int:
+    return sum(text.count(marker) for marker in _MOJIBAKE_MARKERS)
+
+
+def _fix_mojibake_text(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value
+    replacements = {
+        "\u00c3\u00a6": "\u00e6",
+        "\u00c3\u00b8": "\u00f8",
+        "\u00c3\u00a5": "\u00e5",
+        "\u00e3\u00a6": "\u00e6",
+        "\u00e3\u00b8": "\u00f8",
+        "\u00e3\u00a5": "\u00e5",
+        "\u00c3\u2020": "\u00c6",
+        "\u00c3\u02dc": "\u00d8",
+        "\u00c3\u2026": "\u00c5",
+        "\u00c2\u00b0C": "\u00b0C",
+        "\u00c2\u00b0": "\u00b0",
+        "\u00e2\u0080\u0093": "-",
+        "\u00e2\u0080\u0094": "-",
+        "\u00e2\u0086\u0092": "->",
+        "\u00e2\u0080\u00a2": "\u2022",
+        "\u00e2\u0080\u0099": "'",
+        "\u00e2\u0080\u009c": '"',
+        "\u00e2\u0080\u009d": '"',
+    }
+    for _ in range(3):
+        previous = text
+        for bad, good in replacements.items():
+            text = text.replace(bad, good)
+        for encoding in ("latin-1", "cp1252"):
+            try:
+                repaired = text.encode(encoding).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            if _mojibake_score(repaired) < _mojibake_score(text):
+                text = repaired
+        if text == previous:
+            break
+    return text
+
+
+def _clean_text_tree(value: Any) -> Any:
+    if isinstance(value, str):
+        return _fix_mojibake_text(value)
+    if isinstance(value, list):
+        return [_clean_text_tree(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _clean_text_tree(val) for key, val in value.items()}
+    return value
 
 
 def _dedupe_lines(lines: list[str]) -> list[str]:
@@ -128,17 +184,17 @@ def _room_summary_from_state(room: dict[str, Any]) -> str:
 
     parts = [name]
     if temp is not None and target is not None:
-        parts.append(f"{temp:.1f}°C mod mål {target:.1f}°C")
+        parts.append(f"{temp:.1f}Â°C mod mÃ¥l {target:.1f}Â°C")
     if deficit > 0:
-        parts.append(f"underskud {deficit:.1f}°C")
+        parts.append(f"underskud {deficit:.1f}Â°C")
     elif surplus > 0:
-        parts.append(f"overskud {surplus:.1f}°C")
+        parts.append(f"overskud {surplus:.1f}Â°C")
     else:
-        parts.append("tæt på mål")
+        parts.append("tÃ¦t pÃ¥ mÃ¥l")
     if humidity is not None:
         parts.append(f"fugt {humidity:.0f}%")
     parts.append(f"varme: {heat_summary}")
-    return ", ".join(parts) + "."
+    return _fix_mojibake_text(", ".join(parts) + ".")
 
 
 def _filtered_report_points(data: dict[str, Any], report: dict[str, Any], bullets: list[Any]) -> list[str]:
@@ -180,7 +236,7 @@ def _filtered_report_points(data: dict[str, Any], report: dict[str, Any], bullet
         "estimeret besparelse:",
         "varmepumpe billigst:",
         "rumvurdering:",
-        "alle rum er tæt på måltemperatur.",
+        "alle rum er tÃ¦t pÃ¥ mÃ¥ltemperatur.",
         "ingen rum har underskud",
     )
 
@@ -202,6 +258,20 @@ def _filtered_report_points(data: dict[str, Any], report: dict[str, Any], bullet
     return _dedupe_lines(filtered_points)
 
 
+def _pretty_value(value: Any, *, unit: str = "", decimals: int | None = None, default: str = "Ukendt") -> str:
+    if value in (None, "", "unknown", "unavailable"):
+        return default
+    if isinstance(value, bool):
+        return "Ja" if value else "Nej"
+    if isinstance(value, (int, float)):
+        if decimals is None:
+            text = str(value)
+        else:
+            text = f"{float(value):.{decimals}f}"
+        return f"{text}{unit}"
+    return _fix_mojibake_text(str(value).strip()) or default
+
+
 def _format_report_long(
     data: dict[str, Any],
     report: dict[str, Any],
@@ -214,6 +284,7 @@ def _format_report_long(
     if report_engine_display != "OpenClaw":
         return long_text
 
+    facts = _report_fact_bundle(data)
     room_analyses_raw = report.get("room_analyses", [])
     room_analyses = room_analyses_raw if isinstance(room_analyses_raw, list) else []
 
@@ -224,45 +295,42 @@ def _format_report_long(
     top_lines = _dedupe_lines(
         [
             short_clean,
-            f"Beslutningsmotor: {_display_engine(data.get('ai_primary_engine_display'), 'Ukendt')}",
-            f"AI-kilde nu: {_display_engine(data.get('ai_decision_source_display'), 'Ukendt')}",
-            f"Fallback-motor: {fallback_display}",
-            f"Rapportmotor: {report_engine_display}",
-            (
-                f"OpenClaw model: {data.get('openclaw_model_preferred')}"
-                if data.get("openclaw_model_preferred")
-                else ""
-            ),
-            (
-                f"OpenClaw fallback: {data.get('openclaw_model_fallback')}"
-                if data.get("openclaw_model_fallback")
-                else ""
-            ),
-            (
-                f"OpenClaw aktiv model: {(_openclaw_meta(data).get('actual_model') or data.get('openclaw_model_preferred'))}"
-                if (data.get("openclaw_model_preferred") or _openclaw_meta(data).get("actual_model"))
-                else ""
-            ),
-            (
-                f"AI-faktor: {_num_or_zero(data.get('ai_factor'), 2)}"
-                if data.get("ai_factor") is not None
-                else ""
-            ),
-            (
-                f"AI-konfidens: {_num_or_zero(data.get('ai_confidence'), 1)}%"
-                if data.get("ai_confidence") is not None
-                else ""
-            ),
-            (
-                f"Billigste varmevalg: {data.get('cheapest_heat_source')}"
-                if data.get("cheapest_heat_source")
-                else ""
-            ),
-            (
-                f"Billigste alternativ til varmepumpe: {data.get('cheapest_alt_name')}"
-                if data.get("cheapest_alt_name")
-                else ""
-            ),
+            f"Faktor: {_pretty_value(facts.get('factor'), decimals=1)}",
+            f"Konfidens: {_pretty_value(facts.get('confidence'), unit='%', decimals=1)}",
+            f"Kilde: {_display_engine(data.get('ai_decision_source_display'), 'Ukendt')}",
+            f"Billigste varmekilde: {_pretty_value(facts.get('cheapest_heat_source'))}",
+        ]
+    )
+
+    why_lines = _dedupe_lines(
+        [
+            f"Samlet vurdering: {_pretty_value(facts.get('samlet_vurdering'))}",
+            f"Override-vurdering: {_pretty_value(facts.get('override_vurdering'))}",
+            f"Fokusrum: {_pretty_value(facts.get('fokusrum'), default='Ingen')}",
+        ]
+    )
+
+    context_lines = _dedupe_lines(
+        [
+            f"Tid: {_pretty_value(facts.get('updated_at'))}",
+            f"Request: {_pretty_value(facts.get('request_id'))}",
+            f"Run: {_pretty_value(facts.get('run_id'))}",
+            f"Mode: {_pretty_value(facts.get('mode'))}",
+            f"Boost: {_bool_text(facts.get('boost'), unknown='Nej')}",
+            f"Udetemperatur: {_pretty_value(facts.get('outside_temperature'), decimals=1)}",
+            f"Aktiv varme: {_bool_text(facts.get('heating_active'))}",
+            f"Flow begrænset: {_bool_text(facts.get('flow_limited'))}",
+            f"Sidste beslutningsalder: {_pretty_value(facts.get('last_decision_age_sec'), unit=' sek', decimals=0)}",
+        ]
+    )
+
+    diagnostics_lines = _dedupe_lines(
+        [
+            f"Aktivt opvarmede rum: {_list_text(facts.get('active_heating_rooms'))}",
+            f"Rum tæt på mål: {_list_text(facts.get('near_target_rooms'))}",
+            f"Over målet: {_list_text(facts.get('overshooting_rooms'))}",
+            f"Rum nær handling: {_list_text(facts.get('action_rooms'))}",
+            f"Tørre rum: {_list_text(facts.get('dry_rooms'))}",
         ]
     )
 
@@ -291,16 +359,25 @@ def _format_report_long(
     point_lines = [f"- {line}" for line in _filtered_report_points(data, report, bullets)]
     decision_lines = _current_decision_lines(_current_decision_snapshot(data))
     decision_section_lines = [f"- {line}" if not line.startswith("- ") else line for line in decision_lines]
+    room_decision_lines = [f"- {line}" for line in (facts.get("rum_beslutninger") or [])]
 
     sections: list[str] = []
     if top_lines:
         sections.append("Kort resume\n" + "\n".join(top_lines))
+    if decision_section_lines:
+        sections.append("Aktiv beslutning\n" + "\n".join(decision_section_lines))
+    if why_lines:
+        sections.append("Hvorfor blev den taget?\n" + "\n".join(why_lines))
+    if context_lines:
+        sections.append("Kontekst\n" + "\n".join(context_lines))
+    if diagnostics_lines:
+        sections.append("Diagnostik\n" + "\n".join(diagnostics_lines))
+    if room_decision_lines:
+        sections.append("Rum-beslutninger\n" + "\n".join(room_decision_lines))
     if room_lines:
         sections.append("Rum\n" + "\n".join(room_lines))
-    if decision_section_lines:
-        sections.append("Aktiv beslutning nu\n" + "\n".join(decision_section_lines))
     if point_lines:
-        sections.append("Punkter\n" + "\n".join(point_lines))
+        sections.append("Supplerende punkter\n" + "\n".join(point_lines))
 
     return "\n\n".join(section for section in sections if section).strip() or long_text
 
@@ -353,8 +430,17 @@ def _decision_diagnostics(data: dict[str, Any]) -> dict[str, Any]:
 def _list_text(values: Any) -> str:
     if not isinstance(values, list):
         return "Ingen"
-    cleaned = [str(v).strip() for v in values if str(v).strip()]
-    return ", ".join(cleaned) if cleaned else "Ingen"
+    cleaned: list[str] = []
+    for value in values:
+        if isinstance(value, dict):
+            name = _fix_mojibake_text(str(value.get("name", "")).strip())
+            if name:
+                cleaned.append(name)
+                continue
+        text = _fix_mojibake_text(str(value).strip())
+        if text:
+            cleaned.append(text)
+    return _fix_mojibake_text(", ".join(cleaned) if cleaned else "Ingen")
 
 
 def _bool_text(value: Any, *, unknown: str = "Ukendt") -> str:
@@ -371,7 +457,7 @@ def _derived_room_names(data: dict[str, Any], predicate) -> list[str]:
             continue
         try:
             if predicate(room):
-                name = str(room.get("name", "")).strip()
+                name = _fix_mojibake_text(str(room.get("name", "")).strip())
                 if name:
                     names.append(name)
         except Exception:
@@ -429,14 +515,18 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
     request_id = decision.get("request_id") or meta.get("request_id")
     run_id = decision.get("run_id") or meta.get("openclaw_run_id")
 
-    override_vurdering = diagnostics.get("override_reason") or diagnostics.get("no_change_reason") or "Ingen s\u00e6rskilt override-begrundelse"
-    samlet_vurdering = diagnostics.get("summary") or decision.get("reason") or data.get("ai_reason") or "Ingen ekstra forklaring"
+    override_vurdering = _fix_mojibake_text(
+        diagnostics.get("override_reason") or diagnostics.get("no_change_reason") or "Ingen særskilt override-begrundelse"
+    )
+    samlet_vurdering = _fix_mojibake_text(
+        diagnostics.get("summary") or decision.get("reason") or data.get("ai_reason") or "Ingen ekstra forklaring"
+    )
 
     fokusrum = diagnostics.get("focus_rooms")
     if isinstance(fokusrum, list) and fokusrum:
         fokusrum_text = _list_text(fokusrum)
     else:
-        fokusrum_text = data.get("focus_room") or _list_text(action_rooms)
+        fokusrum_text = _fix_mojibake_text(data.get("focus_room")) or _list_text(action_rooms)
         if not fokusrum_text or fokusrum_text == "Ingen":
             fokusrum_text = "Ingen"
 
@@ -444,11 +534,11 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
     for room in rooms:
         if not isinstance(room, dict):
             continue
-        name = str(room.get("name", "")).strip() or "Rum"
-        mode = str(room.get("mode", "")).strip() or "-"
+        name = _fix_mojibake_text(str(room.get("name", "")).strip()) or "Rum"
+        mode = _fix_mojibake_text(str(room.get("mode", "")).strip()) or "-"
         target = room.get("target_temperature")
         target_text = f"{float(target):.1f}" if isinstance(target, (int, float)) else "-"
-        reason = str(room.get("reason", "")).strip()
+        reason = _fix_mojibake_text(str(room.get("reason", "")).strip())
         line = f"{name} -> {mode} {target_text}"
         if reason:
             line += f" ({reason})"
@@ -459,8 +549,8 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
         "run_id": run_id or "Ukendt",
         "factor": data.get("ai_factor"),
         "confidence": data.get("ai_confidence"),
-        "reason": decision.get("reason") or data.get("ai_reason") or "Ingen \u00e5rsag angivet",
-        "mode": str(global_block.get("mode") or "Ukendt"),
+        "reason": _fix_mojibake_text(decision.get("reason") or data.get("ai_reason") or "Ingen årsag angivet"),
+        "mode": _fix_mojibake_text(str(global_block.get("mode") or "Ukendt")),
         "boost": bool(global_block.get("boost", False)),
         "outside_temperature": outside_temperature,
         "heating_active": heating_active,
@@ -476,7 +566,7 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
         "override_vurdering": override_vurdering,
         "fokusrum": fokusrum_text,
         "rum_beslutninger": rum_beslutninger,
-        "updated_at": data.get("updated_at") or data.get("last_report_generated") or "Ukendt",
+        "updated_at": _fix_mojibake_text(data.get("updated_at") or data.get("last_report_generated") or "Ukendt"),
     }
 
 def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
@@ -493,14 +583,14 @@ def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
             continue
         if row.get("should_change") is False:
             continue
-        room_name = str(row.get("name", "")).strip() or "Rum"
+        room_name = _fix_mojibake_text(str(row.get("name", "")).strip()) or "Rum"
         active_rooms.append(
             {
                 "name": room_name,
                 "entity_id": str(row.get("entity_id", "")).strip(),
                 "target_temperature": row.get("target_temperature"),
-                "mode": str(row.get("mode", "")).strip(),
-                "reason": str(row.get("reason", "")).strip(),
+                "mode": _fix_mojibake_text(str(row.get("mode", "")).strip()),
+                "reason": _fix_mojibake_text(str(row.get("reason", "")).strip()),
             }
         )
 
@@ -508,8 +598,8 @@ def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     source_raw = str(data.get("ai_decision_source", "")).strip()
     prev_source_display = _display_engine(data.get("ai_prev_decision_source_display"), default="Ukendt")
     prev_source_raw = str(data.get("ai_prev_decision_source", "")).strip()
-    decision_reason = str(data.get("ai_reason", "")).strip()
-    prev_reason = str(data.get("ai_prev_reason", "")).strip()
+    decision_reason = _fix_mojibake_text(str(data.get("ai_reason", "")).strip())
+    prev_reason = _fix_mojibake_text(str(data.get("ai_prev_reason", "")).strip())
     try:
         factor = float(data.get("ai_factor"))
     except (TypeError, ValueError):
@@ -579,10 +669,10 @@ def _current_decision_lines(snapshot: dict[str, Any]) -> list[str]:
 
     reason = str(snapshot.get("reason", "")).strip()
     if reason:
-        lines.append(f"Aarsag: {reason}")
-    from_reason = str(snapshot.get("from_reason", "")).strip()
+        lines.append(f"Årsag: {reason}")
+    from_reason = _fix_mojibake_text(str(snapshot.get("from_reason", "")).strip())
     if from_reason and from_reason.lower() != reason.lower():
-        lines.append(f"Fra aarsag: {from_reason}")
+        lines.append(f"Fra årsag: {from_reason}")
 
     global_block = snapshot.get("global", {})
     if isinstance(global_block, dict):
@@ -694,7 +784,7 @@ class AiVarmeConfidenceSensor(AiVarmeBaseEntity, SensorEntity):
 
 def _room_slug(room_name: str) -> str:
     normalized = room_name.lower()
-    normalized = normalized.replace("æ", "ae").replace("ø", "oe").replace("å", "aa")
+    normalized = normalized.replace("Ã¦", "ae").replace("Ã¸", "oe").replace("Ã¥", "aa")
     normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
     return normalized or "rum"
 
@@ -708,7 +798,7 @@ class AiVarmeRoomBaseSensor(AiVarmeBaseEntity, SensorEntity):
         self._room_slug = _room_slug(room_name)
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{entry.entry_id}_room_{self._room_slug}")},
-            name=f"{entry.title} • {room_name}",
+            name=f"{entry.title} â€¢ {room_name}",
             manufacturer="Local",
             model="AI Varme Styring Rum",
             via_device=(DOMAIN, entry.entry_id),
@@ -750,13 +840,13 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
         if not room:
             return "Ukendt"
         if room.get("opening_active"):
-            return "Pause pga. åbning"
+            return _fix_mojibake_text("Pause pga. \u00e5bning")
         deficit = _safe_float(room.get("deficit"), 0.0)
         surplus = _safe_float(room.get("surplus"), 0.0)
         if deficit > 0:
             return "Varmebehov"
         if surplus > 0:
-            return "Over mål"
+            return _fix_mojibake_text("Over m\u00e5l")
         return "Stabil"
 
     @property
@@ -787,31 +877,31 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
         heat_need_source = "temperatur"
         if comfort_mode_active:
             if opening_active:
-                comfort_reason = "Komfort ignoreres midlertidigt, fordi rummet er sat på pause pga. åbning."
+                comfort_reason = "Komfort ignoreres midlertidigt, fordi rummet er sat pÃ¥ pause pga. Ã¥bning."
             elif comfort_gap > deficit + 0.05:
                 heat_need_source = "komfort"
-                if humidity is not None and comfort_band == "tør":
-                    comfort_reason = f"Tør luft ({humidity:.0f}%) løfter det oplevede varmebehov lidt."
+                if humidity is not None and comfort_band == "tÃ¸r":
+                    comfort_reason = f"TÃ¸r luft ({humidity:.0f}%) lÃ¸fter det oplevede varmebehov lidt."
                 elif humidity is not None and comfort_band == "fugtig":
-                    comfort_reason = f"Høj fugt ({humidity:.0f}%) påvirker komforten og holder styringen mere forsigtig."
+                    comfort_reason = f"HÃ¸j fugt ({humidity:.0f}%) pÃ¥virker komforten og holder styringen mere forsigtig."
                 else:
-                    comfort_reason = "Oplevet komfort vejer lidt tungere end rå temperatur lige nu."
-            elif humidity is not None and comfort_band in {"tør", "fugtig"}:
-                comfort_reason = f"Fugt ({humidity:.0f}%) overvåges, men ændrer ikke varmebehovet lige nu."
+                    comfort_reason = "Oplevet komfort vejer lidt tungere end rÃ¥ temperatur lige nu."
+            elif humidity is not None and comfort_band in {"tÃ¸r", "fugtig"}:
+                comfort_reason = f"Fugt ({humidity:.0f}%) overvÃ¥ges, men Ã¦ndrer ikke varmebehovet lige nu."
             else:
-                comfort_reason = "Komfortmode er aktiv, men rå temperatur er stadig det styrende signal."
-        return {
+                comfort_reason = "Komfortmode er aktiv, men rÃ¥ temperatur er stadig det styrende signal."
+        return _clean_text_tree({
             "temperatur": room.get("temperature"),
             "temperatur_raw": room.get("temperature_raw"),
-            "ai_mål": target_value,
-            "eco_mål": room.get("eco_target"),
+            "ai_mÃ¥l": target_value,
+            "eco_mÃ¥l": room.get("eco_target"),
             "komfort_mode_aktiv": comfort_mode_active,
             "komfort_target": room.get("comfort_target"),
             "komfort_offset_c": room.get("comfort_offset_c"),
             "komfort_gap": room.get("comfort_gap"),
             "effektivt_varmebehov": room.get("effective_gap"),
-            "komfort_bånd": room.get("comfort_band"),
-            "komfort_årsag": comfort_reason,
+            "komfort_bÃ¥nd": room.get("comfort_band"),
+            "komfort_Ã¥rsag": comfort_reason,
             "varmebehovskilde": heat_need_source,
             "fugt": room.get("humidity"),
             "eco_away_minutter": room.get("presence_away_min"),
@@ -828,11 +918,11 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
             "boost_delta_c": room.get("boost_delta_c"),
             "boost_varighed_min": room.get("boost_duration_min"),
             "boost_indtil": room.get("boost_until"),
-            "åbning_aktiv": room.get("opening_active"),
+            "Ã¥bning_aktiv": room.get("opening_active"),
             "presence_aktiv": room.get("occupancy_active"),
             "presence_fallback_aktiv": room.get("occupancy_source_fallback", False),
             "presence_sidst_skiftet": room.get("occupancy_last_change"),
-            "presence_sensorer_utilgængelige": room.get("occupancy_unavailable_sensors", []),
+            "presence_sensorer_utilgÃ¦ngelige": room.get("occupancy_unavailable_sensors", []),
             "presence_eco_tilladt": room.get("presence_eco_enabled", False),
             "learning_tilladt": room.get("learning_enabled", False),
             "vinduespause_tilladt": room.get("opening_pause_enabled", True),
@@ -843,14 +933,14 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
             "varmepumpe_intern_temp": room.get("heat_pump_internal_temp"),
             "varmepumpe_intern_bias_c": room.get("heat_pump_internal_bias_c"),
             "radiatorer": room.get("radiators", []),
-        }
+        })
 
 
 class AiVarmeRoomTemperatureSensor(AiVarmeRoomBaseSensor):
     """Per-room temperature mirror sensor."""
 
     _attr_icon = "mdi:thermometer"
-    _attr_native_unit_of_measurement = "°C"
+    _attr_native_unit_of_measurement = "Â°C"
 
     def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
         super().__init__(coordinator, entry, room_name)
@@ -873,11 +963,11 @@ class AiVarmeRoomTargetSensor(AiVarmeRoomBaseSensor):
     """Per-room AI target mirror sensor."""
 
     _attr_icon = "mdi:target"
-    _attr_native_unit_of_measurement = "°C"
+    _attr_native_unit_of_measurement = "Â°C"
 
     def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
         super().__init__(coordinator, entry, room_name)
-        self._attr_name = f"{room_name} AI-mål"
+        self._attr_name = f"{room_name} AI-mÃ¥l"
         self._attr_unique_id = f"{entry.entry_id}_room_{self._room_slug}_ai_target"
 
     @property
@@ -928,11 +1018,11 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
         if data.get("thermostat_handover", False):
             return "Thermostat takeover"
         if data.get("opening_active", False):
-            return "Pause pga. åbning"
+            return _fix_mojibake_text("Pause pga. \u00e5bning")
         if data.get("presence_eco_active", False):
             return "Eco aktiv"
         if data.get("flow_limited", False):
-            return "Flow begrænset"
+            return _fix_mojibake_text("Flow begr\u00e6nset")
         return "Aktiv"
 
     @property
@@ -947,14 +1037,14 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             for room in rooms[:12]
             if isinstance(room, dict) and str(room.get("name", "")).strip()
         ]
-        return {
+        return _clean_text_tree({
             "opdateret": data.get("updated_at"),
             "handlinger_antal": len(actions) if isinstance(actions, list) else 0,
             "handlinger_preview": actions[:8] if isinstance(actions, list) else [],
             "rum_antal": len(rooms) if isinstance(rooms, list) else 0,
             "rum_navne": room_names,
-            "utilgængelige_sensorer": unavailable,
-            "utilgængelige_sensorer_antal": len(unavailable) if isinstance(unavailable, list) else 0,
+            "utilgÃ¦ngelige_sensorer": unavailable,
+            "utilgÃ¦ngelige_sensorer_antal": len(unavailable) if isinstance(unavailable, list) else 0,
             "komfort_mode_aktiv": data.get("comfort_mode_enabled", False),
             "komfort_mode_sidst_skiftet": data.get("comfort_mode_last_changed"),
             "komfort_mode_status": data.get("comfort_mode_status"),
@@ -987,8 +1077,6 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_last_errors": data.get("ai_last_errors", {}),
             "ai_fallback_count": data.get("ai_fallback_count", 0),
             "openclaw_enabled": data.get("openclaw_enabled", False),
-            "openclaw_bridge_url": data.get("openclaw_bridge_url", ""),
-            "openclaw_bridge_stats_updated": data.get("openclaw_bridge_stats_updated"),
             "openclaw_run_id": meta.get("openclaw_run_id"),
             "openclaw_request_id": meta.get("request_id"),
             "openclaw_latency_ms": meta.get("latency_ms"),
@@ -997,7 +1085,7 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "openclaw_model_actual": meta.get("actual_model") or data.get("openclaw_model_preferred"),
             "estimeret_besparelse_kwh": _num_or_zero(data.get("estimated_savings_per_kwh"), 3),
             "estimeret_dagsbesparelse": _num_or_zero(data.get("estimated_daily_savings"), 2),
-        }
+        })
 
 
 class AiVarmeIndicatorSensor(AiVarmeBaseEntity, SensorEntity):
@@ -1025,8 +1113,7 @@ class AiVarmeIndicatorSensor(AiVarmeBaseEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data or {}
         meta = _openclaw_meta(data)
-        bridge_stats = data.get("openclaw_bridge_stats", {}) or {}
-        return {
+        return _clean_text_tree({
             "enabled": data.get("enabled", False),
             "ai_provider_ready": data.get("ai_provider_ready", False),
             "ai_primary_engine": data.get("ai_primary_engine"),
@@ -1037,20 +1124,14 @@ class AiVarmeIndicatorSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_last_fallback_reason": data.get("ai_last_fallback_reason", ""),
             "ai_last_errors": data.get("ai_last_errors", {}),
             "ai_fallback_count": data.get("ai_fallback_count", 0),
-            "openclaw_bridge_stats_updated": data.get("openclaw_bridge_stats_updated"),
-            "openclaw_ok": bridge_stats.get("openclaw_ok"),
-            "openclaw_callback_ok": bridge_stats.get("openclaw_callback_ok"),
-            "openclaw_callback_received": bridge_stats.get("openclaw_callback_received"),
             "openclaw_run_id": meta.get("openclaw_run_id"),
             "openclaw_request_id": meta.get("request_id"),
             "openclaw_latency_ms": meta.get("latency_ms"),
-            "openclaw_runtime_health": data.get("openclaw_runtime_health"),
             "openclaw_model_requested": data.get("openclaw_model_preferred"),
             "openclaw_model_fallback": data.get("openclaw_model_fallback"),
             "openclaw_model_actual": meta.get("actual_model") or data.get("openclaw_model_preferred"),
-            "openclaw_runtime_status": data.get("openclaw_runtime_status", {}),
             "legacy_conflicts": data.get("legacy_conflicts", []),
-        }
+        })
 
 
 class AiVarmeDecisionSourceSensor(AiVarmeBaseEntity, SensorEntity):
@@ -1066,18 +1147,18 @@ class AiVarmeDecisionSourceSensor(AiVarmeBaseEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         data = self.coordinator.data or {}
-        return str(
+        return _fix_mojibake_text(str(
             data.get("ai_decision_source_display")
             or data.get("ai_primary_engine_display")
             or data.get("ai_decision_source")
             or "Ukendt"
-        )
+        ))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data or {}
         meta = _openclaw_meta(data)
-        return {
+        return _clean_text_tree({
             "ai_primary_engine": data.get("ai_primary_engine"),
             "ai_primary_engine_display": data.get("ai_primary_engine_display"),
             "ai_decision_source": data.get("ai_decision_source"),
@@ -1099,9 +1180,7 @@ class AiVarmeDecisionSourceSensor(AiVarmeBaseEntity, SensorEntity):
             "openclaw_callback_url": meta.get("callback_url"),
             "openclaw_latency_ms": meta.get("latency_ms"),
             "openclaw_response_summary": meta.get("openclaw_response_summary"),
-            "openclaw_runtime_health": data.get("openclaw_runtime_health"),
-            "openclaw_runtime_status": data.get("openclaw_runtime_status", {}),
-        }
+        })
 
 
 class AiVarmeHeatingModeSensor(AiVarmeBaseEntity, SensorEntity):
@@ -1215,7 +1294,7 @@ class AiVarmeDailySavingsSensor(AiVarmeBaseEntity, SensorEntity):
 class AiVarmeMonthlySavingsSensor(AiVarmeBaseEntity, SensorEntity):
     """Estimated monthly savings."""
 
-    _attr_name = "Estimeret månedsbesparelse"
+    _attr_name = "Estimeret mÃ¥nedsbesparelse"
     _attr_icon = "mdi:cash-multiple"
     _attr_native_unit_of_measurement = "kr"
 
@@ -1233,9 +1312,9 @@ class AiVarmeMonthlySavingsSensor(AiVarmeBaseEntity, SensorEntity):
 class AiVarmeDeficitSensor(AiVarmeBaseEntity, SensorEntity):
     """Largest current deficit."""
 
-    _attr_name = "Største underskud"
+    _attr_name = "StÃ¸rste underskud"
     _attr_icon = "mdi:thermometer-chevron-up"
-    _attr_native_unit_of_measurement = "°C"
+    _attr_native_unit_of_measurement = "Â°C"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -1267,7 +1346,7 @@ class AiVarmeColdRoomsSensor(AiVarmeBaseEntity, SensorEntity):
 class AiVarmeRadiatorHelpSensor(AiVarmeBaseEntity, SensorEntity):
     """Count rooms where radiator is heating."""
 
-    _attr_name = "Radiatorhjælp rum"
+    _attr_name = "RadiatorhjÃ¦lp rum"
     _attr_icon = "mdi:radiator"
     _attr_native_unit_of_measurement = "rum"
 
@@ -1294,15 +1373,15 @@ class AiVarmeFocusRoomSensor(AiVarmeBaseEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         data = self.coordinator.data or {}
-        return str(data.get("focus_room", "Ingen"))
+        return _fix_mojibake_text(str(data.get("focus_room", "Ingen")))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data or {}
-        return {
+        return _clean_text_tree({
             "delta_c": data.get("focus_room_delta", 0.0),
             "ekstra_rum": data.get("extra_room", "Ingen"),
-        }
+        })
 
 
 class AiVarmeHouseLevelSensor(AiVarmeBaseEntity, SensorEntity):
@@ -1318,7 +1397,7 @@ class AiVarmeHouseLevelSensor(AiVarmeBaseEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         data = self.coordinator.data or {}
-        return str(data.get("house_level", "Ukendt"))
+        return _fix_mojibake_text(str(data.get("house_level", "Ukendt")))
 
 
 class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
@@ -1335,7 +1414,7 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
     def native_value(self) -> str:
         data = self.coordinator.data or {}
         report = data.get("report", {})
-        return report.get("short", "Afventer data")
+        return _fix_mojibake_text(str(report.get("short", "Afventer data")))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1368,7 +1447,7 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
         clean_points = _filtered_report_points(data, report, bullets)
         release_info = _integration_release_info()
         facts = _report_fact_bundle(data)
-        return {
+        return _clean_text_tree({
             # Keep both legacy Danish keys and canonical short/long keys,
             # so dashboard cards can render regardless of which keyset they use.
             "short": short_text,
@@ -1406,6 +1485,7 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "diagnostik_tæt_på_mål": _list_text(facts.get("near_target_rooms")),
             "rum_tæt_på_mål": _list_text(facts.get("near_target_rooms")),
             "diagnostik_over_maal": _list_text(facts.get("overshooting_rooms")),
+            "diagnostik_over_mål": _list_text(facts.get("overshooting_rooms")),
             "over_målet": _list_text(facts.get("overshooting_rooms")),
             "diagnostik_naer_handling": _list_text(facts.get("action_rooms")),
             "diagnostik_nær_handling": _list_text(facts.get("action_rooms")),
@@ -1480,7 +1560,7 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "estimeret_dagsbesparelse": _num_or_zero(data.get("estimated_daily_savings"), 2),
             "estimeret_månedsbesparelse": _num_or_zero(data.get("estimated_monthly_savings"), 2),
             "opdateret": data.get("updated_at"),
-        }
+        })
 
 
 class AiVarmeYesterdaySummarySensor(AiVarmeBaseEntity, SensorEntity):

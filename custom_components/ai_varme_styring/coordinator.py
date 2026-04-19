@@ -402,6 +402,8 @@ def _normalize_primary_engine(engine: str, provider: str) -> str:
 
 def _ai_decision_source_display(source: str) -> str:
     src = str(source or "").strip().lower()
+    if src.startswith("openclaw_conversation"):
+        return "OpenClaw conversation"
     if src.startswith("openclaw_bridge:openclaw_callback"):
         return "OpenClaw callback"
     if src.startswith("openclaw_bridge:openclaw"):
@@ -459,8 +461,8 @@ def _fallback_reason_from_decision(
         return "Sikker standard blev brugt."
     if source_norm == "openclaw_callback":
         return "Sen OpenClaw-callback blev adopteret efter timeout/fallback."
-    if source_norm == "openclaw_mqtt_sensor":
-        return "Frisk OpenClaw-beslutning blev adopteret fra MQTT."
+    if source_norm == "openclaw_conversation_cache":
+        return "Seneste OpenClaw conversation-beslutning blev genbrugt."
     if "ollama_fallback" in source_norm:
         return "Ollama blev brugt som fallback-beslutningsmotor."
     if source_norm.startswith("openclaw_queue:"):
@@ -470,6 +472,21 @@ def _fallback_reason_from_decision(
     if source_norm.startswith("openclaw"):
         return "OpenClaw blev brugt som beslutningsmotor."
     return ""
+
+
+def _ai_decision_source_allows_control(source: str) -> bool:
+    """Return true when the current decision is fresh enough to drive devices."""
+    source_norm = str(source or "").strip().lower()
+    if not source_norm:
+        return False
+    if source_norm in {
+        "last_good",
+        "safe_default",
+        "safe_default_openclaw_only",
+        "safe_default_ollama_cooldown",
+    }:
+        return False
+    return True
 
 
 def _resolve_room_humidity_sensor_entity(hass: HomeAssistant, room_name: str, temp_entity: str | None) -> str | None:
@@ -634,6 +651,7 @@ def _build_openclaw_heating_payload(
     source_payload: dict[str, Any],
     *,
     now_ts: float,
+    conversation_id: str | None = None,
     room_runtime: dict[str, dict[str, Any]],
     weather_forecast_next_2h: dict[str, float] | None = None,
     supply_temp: float | None = None,
@@ -646,6 +664,13 @@ def _build_openclaw_heating_payload(
     """Build the strict OpenClaw heating contract from live integration data."""
 
     rooms = source_payload.get("rooms", [])
+    prices = source_payload.get("prices", {}) if isinstance(source_payload.get("prices"), dict) else {}
+    runtime = source_payload.get("runtime", {}) if isinstance(source_payload.get("runtime"), dict) else {}
+    engine_context = (
+        source_payload.get("engine_context", {})
+        if isinstance(source_payload.get("engine_context"), dict)
+        else {}
+    )
     request_id = str(source_payload.get("request_id") or uuid.uuid4())
     timestamp_utc = str(source_payload.get("timestamp_utc") or dt_util.utcnow().isoformat())
 
@@ -734,14 +759,55 @@ def _build_openclaw_heating_payload(
         {
             "type": "heating_decision",
             "request_id": request_id,
+            "conversation_id": str(conversation_id or "").strip() or None,
             "reply_transport": "mqtt",
             "reply_topic": "homeassistant/ai_varme/openclaw/decision",
             "timestamp_utc": timestamp_utc,
+            "engine_context": _compact_payload_dict(
+                {
+                    "ai_provider": engine_context.get("ai_provider"),
+                    "ai_primary_engine": engine_context.get("ai_primary_engine"),
+                    "ai_primary_engine_display": engine_context.get("ai_primary_engine_display"),
+                    "openclaw_enabled": engine_context.get("openclaw_enabled"),
+                }
+            ),
             "mode": mode,
             "boost": mode == "boost",
             "heating_active": any(bool(room.get("is_heating_now")) for room in rooms if isinstance(room, dict))
             if isinstance(rooms, list)
             else False,
+            "runtime": _compact_payload_dict(
+                {
+                    "enabled": runtime.get("enabled"),
+                    "presence_eco_enabled": runtime.get("presence_eco_enabled"),
+                    "presence_eco_active": runtime.get("presence_eco_active"),
+                    "pid_enabled": runtime.get("pid_enabled"),
+                    "learning_enabled": runtime.get("learning_enabled"),
+                    "flow_limited": runtime.get("flow_limited"),
+                    "thermostat_handover": runtime.get("thermostat_handover"),
+                    "provider_ready": runtime.get("provider_ready"),
+                }
+            ),
+            "prices": _compact_payload_dict(
+                {
+                    "electricity": prices.get("electricity"),
+                    "gas": prices.get("gas"),
+                    "district_heat": prices.get("district_heat"),
+                    "effective_heat_pump_price": prices.get("effective_heat_pump_price"),
+                    "cheapest_heat_source": prices.get("cheapest_heat_source"),
+                    "cheapest_alt_name": prices.get("cheapest_alt_name"),
+                    "cheapest_alt_price": prices.get("cheapest_alt_price"),
+                    "heat_pump_cheaper": prices.get("heat_pump_cheaper"),
+                    "estimated_savings_per_kwh": prices.get("estimated_savings_per_kwh"),
+                    "estimated_daily_savings": prices.get("estimated_daily_savings"),
+                    "estimated_monthly_savings": prices.get("estimated_monthly_savings"),
+                    "price_awareness": prices.get("price_awareness"),
+                    "heat_pump_cheap_priority_factor": prices.get("heat_pump_cheap_priority_factor"),
+                    "heat_pump_cheap_fan_mode": prices.get("heat_pump_cheap_fan_mode"),
+                    "heat_source_direction_bias": prices.get("heat_source_direction_bias"),
+                    "cheap_power_radiator_setback_extra_c": prices.get("cheap_power_radiator_setback_extra_c"),
+                }
+            ),
             "outside_temperature": _safe_float(source_payload.get("outdoor_temp")),
             "weather_forecast_next_2h": forecast_payload if forecast_payload else None,
             "rooms": normalized_rooms,
@@ -1086,6 +1152,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._recent_temperature_commands: dict[str, tuple[float, float]] = {}
         self._recent_hvac_commands: dict[str, tuple[str, float]] = {}
         self._recent_fan_commands: dict[str, tuple[str, float]] = {}
+        self._temperature_hold_logs: dict[str, float] = {}
         self._runtime_events: dict[str, float | None] = {
             "enabled_last_changed": None,
             "presence_eco_last_changed": None,
@@ -1432,6 +1499,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 room_by_entity[rad] = room
 
         touched_rooms: set[str] = set()
+        ai_target_hold_s = 15.0 * 60.0
+        ai_mode_hold_s = 20.0 * 60.0
         for directive in room_directives:
             if not isinstance(directive, dict):
                 continue
@@ -1453,13 +1522,46 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             mode = str(directive.get("mode", "")).strip().lower()
             reason = str(directive.get("reason", "")).strip()
             room_rt = self._room_runtime.setdefault(room.name, {})
+            current_override = _safe_float(room_rt.get("target_override"))
+            current_effective_target = current_override if current_override is not None else _safe_float(room.target)
+            last_ai_target_ts = _safe_float(room_rt.get("openclaw_target_override_ts"))
+            last_ai_mode_ts = _safe_float(room_rt.get("openclaw_mode_override_ts"))
+            current_mode_override = str(room_rt.get("openclaw_mode_override", "")).strip().lower()
+            severe_overheat = float(room.surplus) >= 2.0
+            meaningful_heat_need = float(room.deficit) >= 0.6
+            urgent_override = severe_overheat or meaningful_heat_need or mode == "off"
 
             if target_temp is not None:
                 target_temp = _normalize_ai_input_number_target(target_temp)
                 if target_temp is None:
                     continue
+                target_delta = (
+                    abs(float(current_effective_target) - float(target_temp))
+                    if current_effective_target is not None
+                    else None
+                )
+                if (
+                    last_ai_target_ts is not None
+                    and not urgent_override
+                    and target_delta is not None
+                    and target_delta < 1.0
+                    and (now_ts - float(last_ai_target_ts)) < ai_target_hold_s
+                ):
+                    actions.append(
+                        f"{room.name}: AI-mål holdes stabilt ({float(current_effective_target):.1f}->{float(target_temp):.1f}C udsat)"
+                    )
+                    target_temp = None
+                elif (
+                    current_effective_target is not None
+                    and target_delta is not None
+                    and target_delta < 0.2
+                ):
+                    target_temp = None
+            if target_temp is not None:
                 room_rt["target_override"] = target_temp
                 room_rt["room_target_last_changed"] = now_ts
+                room_rt["openclaw_target_override_active"] = True
+                room_rt["openclaw_target_override_ts"] = now_ts
                 room.target = target_temp
                 room.deficit = max(target_temp - room.temperature, 0.0)
                 room.surplus = max(room.temperature - target_temp, 0.0)
@@ -1471,6 +1573,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     actions.append(f"{room.name}: OpenClaw driftsoverstyring -> {target_temp}°C")
 
             if mode in {"off", "heat", "auto", "eco"}:
+                if (
+                    current_mode_override
+                    and current_mode_override != mode
+                    and last_ai_mode_ts is not None
+                    and not urgent_override
+                    and (now_ts - float(last_ai_mode_ts)) < ai_mode_hold_s
+                ):
+                    actions.append(
+                        f"{room.name}: AI-mode holdes stabil ({current_mode_override}->{mode} udsat)"
+                    )
+                    continue
                 room_rt["openclaw_mode_override"] = mode
                 room_rt["openclaw_mode_override_ts"] = now_ts
                 if mode == "off":
@@ -1485,6 +1598,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if "openclaw_mode_override" in room_rt:
                 room_rt.pop("openclaw_mode_override", None)
                 room_rt.pop("openclaw_mode_override_ts", None)
+            if room_rt.get("openclaw_target_override_active"):
+                room_rt.pop("target_override", None)
+                room_rt.pop("room_target_last_changed", None)
+                room_rt.pop("openclaw_target_override_active", None)
+                room_rt.pop("openclaw_target_override_ts", None)
 
     async def async_set_enabled(self, enabled: bool) -> None:
         runtime = self.hass.data[DOMAIN][self.entry.entry_id]
@@ -1780,32 +1898,34 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_ai_update = dt_util.utcnow().timestamp()
         return True
 
-    def _adopt_mqtt_sensor_decision_if_available(self) -> bool:
-        try:
-            mqtt_decision = self.ai_client._mqtt_sensor_decision()
-        except Exception:  # noqa: BLE001
-            return False
-        if not isinstance(mqtt_decision, dict):
-            return False
-        meta = mqtt_decision.get('_openclaw_meta') if isinstance(mqtt_decision.get('_openclaw_meta'), dict) else {}
-        request_id = str(meta.get('request_id') or '').strip()
-        age_sec = meta.get('age_sec')
-        if not request_id:
-            return False
-        if isinstance(age_sec, (int, float)) and float(age_sec) > 300:
-            return False
-        try:
-            self._ai_factor = max(0.6, min(1.4, float(mqtt_decision.get('factor', self._ai_factor))))
-            self._ai_confidence = max(0.0, min(100.0, float(mqtt_decision.get('confidence', self._ai_confidence))))
-        except Exception:  # noqa: BLE001
-            return False
-        self._ai_reason = str(mqtt_decision.get('reason', self._ai_reason)).strip() or self._ai_reason
-        adopted = dict(mqtt_decision)
-        adopted['_openclaw_meta'] = meta
-        self._ai_structured_decision = adopted
-        self._ai_decision_source = 'openclaw_mqtt_sensor'
-        self._last_ai_update = dt_util.utcnow().timestamp()
-        return True
+    def _adopt_openclaw_conversation_decision_if_available(self) -> bool:
+        for state in self.hass.states.async_all("sensor"):
+            attrs = dict(state.attributes or {})
+            parsed = attrs.get("parsed")
+            raw_text = attrs.get("raw_text")
+            if not isinstance(parsed, dict) or not raw_text:
+                continue
+            try:
+                self._ai_factor = max(0.6, min(1.4, float(parsed.get("factor", self._ai_factor))))
+                self._ai_confidence = max(0.0, min(100.0, float(parsed.get("confidence", self._ai_confidence))))
+            except Exception:  # noqa: BLE001
+                continue
+            self._ai_reason = str(parsed.get("reason", self._ai_reason)).strip() or self._ai_reason
+            adopted = dict(parsed)
+            adopted["_openclaw_meta"] = {
+                **(
+                    parsed.get("_openclaw_meta", {})
+                    if isinstance(parsed.get("_openclaw_meta"), dict)
+                    else {}
+                ),
+                "sensor_entity_id": state.entity_id,
+                "transport": "ha_conversation_cache",
+            }
+            self._ai_structured_decision = adopted
+            self._ai_decision_source = "openclaw_conversation_cache"
+            self._last_ai_update = dt_util.utcnow().timestamp()
+            return True
+        return False
 
     async def async_trigger_ai_report(self) -> None:
         self._last_report_update = None
@@ -1875,6 +1995,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entity_id: str | None,
         target: float | None,
         actions: list[str],
+        *,
+        force: bool = False,
     ) -> None:
         """Set climate temperature only when needed."""
         if not entity_id or target is None:
@@ -1892,6 +2014,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         compare_margin = 0.49 if is_known_heat_pump else 0.24
         if pending is not None and abs(pending - target_f) < compare_margin:
             return
+        state = self.hass.states.get(entity_id)
+        attrs = state.attributes if state else {}
+        current = _safe_float(attrs.get("temperature"))
+        current_room_temp = _safe_float(attrs.get("current_temperature"))
         recent = self._recent_temperature_commands.get(entity_id)
         now_ts = dt_util.utcnow().timestamp()
         recent_retry_cooldown_s = 90.0
@@ -1901,9 +2027,34 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and (now_ts - float(recent[1])) < recent_retry_cooldown_s
         ):
             return
-        state = self.hass.states.get(entity_id)
-        attrs = state.attributes if state else {}
-        current = _safe_float(attrs.get("temperature"))
+        if recent and is_known_heat_pump and not force:
+            last_target, last_ts = recent
+            recent_age_s = now_ts - float(last_ts)
+            target_delta = abs(float(last_target) - target_f)
+            hold_s = 15.0 * 60.0 if target_delta < 1.5 else 5.0 * 60.0
+            warmup_urgent = bool(
+                target_f > float(last_target)
+                and current is not None
+                and current_room_temp is not None
+                and (float(current) - float(current_room_temp)) >= 1.0
+                and recent_age_s >= 180.0
+            )
+            cooldown_urgent = bool(
+                target_f < float(last_target)
+                and current is not None
+                and current_room_temp is not None
+                and (float(current_room_temp) - float(current)) >= 2.0
+                and recent_age_s >= 180.0
+            )
+            if recent_age_s < hold_s and not warmup_urgent and not cooldown_urgent:
+                next_log_ts = float(self._temperature_hold_logs.get(entity_id, 0.0) or 0.0)
+                if now_ts >= next_log_ts:
+                    actions.append(
+                        f"{entity_id}: setpunkt holdt stabilt ({float(last_target):.1f}->{target_f:.1f}C udsat)"
+                    )
+                    self._temperature_hold_logs[entity_id] = now_ts + 300.0
+                self._cycle_temperature_commands[entity_id] = float(last_target)
+                return
         current_aligned = True
         if current is not None:
             if is_known_heat_pump:
@@ -1921,6 +2072,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._cycle_temperature_commands[entity_id] = target_f
         self._recent_temperature_commands[entity_id] = (target_f, now_ts)
+        self._temperature_hold_logs.pop(entity_id, None)
         actions.append(f"{entity_id}: temperatur sat til {target_f:.1f}°C")
 
     async def _async_set_hvac_mode_if_needed(
@@ -2683,6 +2835,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 adj_temp = raw_temp - bias
             
                 target = target_base
+                tgt = None
                 tgt_number = _resolve_room_target_number_entity(
                     self.hass, name, room_cfg.get(CONF_ROOM_TARGET_NUMBER)
                 )
@@ -2711,6 +2864,26 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             lock_rt["last_seen_target"] = tgt
                         target = tgt
                 target_override = _safe_float(room_rt.get("target_override"))
+                override_ts = _safe_float(room_rt.get("room_target_last_changed"))
+                eco_active_rt = bool(room_rt.get("eco_active", False))
+                openclaw_target_override_active = bool(
+                    room_rt.get("openclaw_target_override_active", False)
+                )
+                # Backward-compat cleanup for old runtime states where stale target overrides
+                # survived without explicit source metadata.
+                if (
+                    target_override is not None
+                    and tgt is not None
+                    and not eco_active_rt
+                    and not openclaw_target_override_active
+                    and override_ts is not None
+                    and (now_ts - float(override_ts)) >= 1800.0
+                    and abs(float(target_override) - float(tgt)) > 0.01
+                ):
+                    room_rt.pop("target_override", None)
+                    room_rt.pop("room_target_last_changed", None)
+                    target_override = None
+                    LOGGER.info("%s: ryddede forældet target override", name)
                 if target_override is not None:
                     target = target_override
             
@@ -2986,6 +3159,46 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             room_slug_map: dict[str, RoomSnapshot] = {}
             for r in rooms:
                 room_slug_map[_slug_text(r.name)] = r
+
+            def _heat_pump_served_rooms(room: RoomSnapshot) -> list[RoomSnapshot]:
+                """Rooms that a heat pump room can materially heat."""
+                if not room.heat_pump:
+                    return []
+                served: list[RoomSnapshot] = []
+
+                def _add(candidate: RoomSnapshot | None) -> None:
+                    if candidate is None or candidate.name == room.name or candidate in served:
+                        return
+                    served.append(candidate)
+
+                if room.link_group:
+                    for peer in rooms:
+                        if peer.link_group and peer.link_group == room.link_group:
+                            _add(peer)
+
+                hp_slug = _slug_text(str(room.heat_pump).split(".", 1)[-1])
+                for slug, peer in room_slug_map.items():
+                    if slug and slug in hp_slug:
+                        _add(peer)
+
+                for adj_name in room.adjacent_rooms:
+                    _add(room_slug_map.get(_slug_text(adj_name)))
+
+                return served
+
+            def _served_overheat_info(
+                room: RoomSnapshot,
+                threshold_c: float,
+            ) -> tuple[float, list[str]]:
+                """Largest surplus and massively hot rooms served by this room's heat pump."""
+                served_surplus_max = 0.0
+                hot_names: list[str] = []
+                for peer in _heat_pump_served_rooms(room):
+                    peer_surplus = max(0.0, float(peer.temperature) - float(peer.target))
+                    served_surplus_max = max(served_surplus_max, peer_surplus)
+                    if peer_surplus >= threshold_c:
+                        hot_names.append(peer.name)
+                return served_surplus_max, hot_names
             
             max_deficit = max((r.deficit for r in rooms), default=0.0)
             max_surplus = max((r.surplus for r in rooms), default=0.0)
@@ -3158,10 +3371,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     or float(self._runtime_events.get("manual_ai_last_trigger") or 0.0) > float(self._last_ai_update or 0.0)
                 )
             )
-            if (
+            ai_decision_requested = bool(
                 ai_provider_ready
                 and (decision_due or manual_ai_requested)
                 and ((not startup_refresh) or manual_ai_requested)
+            )
+            ai_control_waiting_for_decision = bool(
+                ai_provider_ready
+                and not _ai_decision_source_allows_control(self._ai_decision_source)
+            )
+            if (
+                ai_decision_requested
             ):
                 try:
                     outdoor_for_ai = None
@@ -3331,10 +3551,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         else None
                     )
                     last_decision_age_sec = int(round(_minutes_since(self._last_ai_update, now_ts) * 60.0, 0))
+                    openclaw_conversation_id = f"{DOMAIN}_{self.entry.entry_id}_heating"
                     openclaw_decision_payload = _build_openclaw_heating_payload(
                         self.hass,
                         ai_payload,
                         now_ts=now_ts,
+                        conversation_id=openclaw_conversation_id,
                         room_runtime=self._room_runtime,
                         weather_forecast_next_2h=weather_forecast_next_2h,
                         supply_temp=None,
@@ -3415,10 +3637,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 self._ai_decision_source,
                                 self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
                             )
-                    adopted_mqtt_result = False
+                    adopted_cached_result = False
                     if self._ai_decision_source in {'last_good', 'safe_default', 'safe_default_openclaw_only'}:
-                        adopted_mqtt_result = self._adopt_mqtt_sensor_decision_if_available()
-                        if adopted_mqtt_result:
+                        adopted_cached_result = self._adopt_openclaw_conversation_decision_if_available()
+                        if adopted_cached_result:
                             self._last_ai_fallback_reason = _fallback_reason_from_decision(
                                 self._ai_decision_source,
                                 self._ai_structured_decision if isinstance(self._ai_structured_decision, dict) else {},
@@ -3426,12 +3648,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if (
                         self._ai_decision_source in {"last_good", "safe_default"}
                         or "ollama_fallback" in self._ai_decision_source
-                    ) and not adopted_openclaw_result and not adopted_mqtt_result:
+                    ) and not adopted_openclaw_result and not adopted_cached_result:
                         self._ai_fallback_count += 1
+                    ai_control_waiting_for_decision = not _ai_decision_source_allows_control(
+                        self._ai_decision_source
+                    )
                     self._last_ai_update = now_ts
                 except Exception as err:  # noqa: BLE001
                     LOGGER.exception("AI decision cycle failed softly: %s", err)
                     actions.append("AI beslutning fejlede - fortsætter med sidste gyldige beslutning")
+                    ai_control_waiting_for_decision = True
             
             manual_report_requested = bool(
                 self._runtime_events.get("manual_report_last_trigger")
@@ -3564,22 +3790,263 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.exception("AI report generation failed softly: %s", err)
                     actions.append("AI rapport fejlede - bevarer sidste gyldige rapport")
             
-            try:
-                await self._async_apply_structured_ai_decision(
-                    rooms,
-                    self._ai_structured_decision,
-                    now_ts,
-                    decimals,
-                    actions,
+            if ai_control_waiting_for_decision:
+                actions.append(
+                    "AI afventer frisk beslutning - enhedskommandoer holdes tilbage"
                 )
-            except Exception as err:  # noqa: BLE001
-                LOGGER.exception("Structured AI decision apply failed softly: %s", err)
-                actions.append("AI rum-overrides fejlede - fortsætter uden structured overrides")
+            else:
+                try:
+                    await self._async_apply_structured_ai_decision(
+                        rooms,
+                        self._ai_structured_decision,
+                        now_ts,
+                        decimals,
+                        actions,
+                    )
+                except Exception as err:  # noqa: BLE001
+                    LOGGER.exception("Structured AI decision apply failed softly: %s", err)
+                    actions.append("AI rum-overrides fejlede - fortsætter uden structured overrides")
             flow_limited = any(r.temperature >= (r.target + flow_limit_margin) for r in rooms)
             provider_error_state = bool(ai_provider_ready and self._ai_confidence <= 0.1)
             if sensor_error:
                 actions.append("Sensorvalidering: outlier fundet")
-            if enabled and ai_provider_ready:
+            if enabled and ai_provider_ready and ai_control_waiting_for_decision:
+                for room in rooms:
+                    if not room.room_enabled:
+                        continue
+                    rt = self._room_runtime.setdefault(room.name, {})
+                    eco_room_enabled = bool(presence_eco_enabled and room.presence_eco_enabled)
+                    room_occupied_now = bool(room.occupancy_active and not vacuum_running)
+                    if room_occupied_now:
+                        rt["room_empty_since"] = None
+                        if rt.get("room_occupied_since") is None:
+                            rt["room_occupied_since"] = now_ts
+                    else:
+                        rt["room_occupied_since"] = None
+                        if rt.get("room_empty_since") is None:
+                            rt["room_empty_since"] = now_ts
+                    if eco_room_enabled:
+                        eco_target_for_ai = round(max(7.0, min(25.0, room.eco_target)), decimals)
+                        eco_radiator_target = round(
+                            max(
+                                7.0,
+                                min(
+                                    25.0,
+                                    eco_target_for_ai - (1.0 if heat_pump_cheaper and room.heat_pump else 0.0),
+                                ),
+                            ),
+                            decimals,
+                        )
+                        eco_due = bool(
+                            not room_occupied_now
+                            and _minutes_since(rt.get("room_empty_since"), now_ts) >= room.presence_away_min
+                        )
+                        eco_return_due = bool(
+                            rt.get("eco_active", False)
+                            and room_occupied_now
+                            and _minutes_since(rt.get("room_occupied_since"), now_ts) >= room.presence_return_min
+                        )
+                        if eco_due and not rt.get("eco_active", False):
+                            rt["eco_active"] = True
+                            rt["eco_last_change"] = now_ts
+                            rt["eco_comfort_target"] = room.target
+                            actions.append(
+                                f"{room.name}: eco aktiv uden frisk AI-beslutning -> {eco_target_for_ai}C"
+                            )
+                        if eco_return_due:
+                            restore_target = _safe_float(rt.get("eco_comfort_target"))
+                            if restore_target is not None:
+                                restore_target = round(max(7.0, min(25.0, restore_target)), decimals)
+                                rt["target_override"] = restore_target
+                                rt["room_target_last_changed"] = now_ts
+                                if room.heat_pump:
+                                    await self._async_set_hvac_mode_if_needed(
+                                        room.heat_pump,
+                                        HVACMode.HEAT,
+                                        actions,
+                                    )
+                                    await self._async_set_temperature_if_needed(
+                                        room.heat_pump,
+                                        restore_target,
+                                        actions,
+                                        force=True,
+                                    )
+                                restore_rad_target = restore_target
+                                if room.heat_pump and heat_pump_cheaper:
+                                    restore_rad_target = round(
+                                        max(7.0, min(25.0, restore_target - 1.0)),
+                                        decimals,
+                                    )
+                                for rad in room.radiators:
+                                    await self._async_set_temperature_if_needed(
+                                        rad,
+                                        restore_rad_target,
+                                        actions,
+                                        force=True,
+                                    )
+                            rt["eco_active"] = False
+                            rt["eco_last_change"] = now_ts
+                            actions.append(
+                                f"{room.name}: eco afsluttet pga. presence mens AI afventer beslutning"
+                            )
+                        elif rt.get("eco_active", False):
+                            rt["target_override"] = eco_target_for_ai
+                            rt["room_target_last_changed"] = now_ts
+                            lock_rt = self._room_runtime.setdefault(
+                                f"__target_lock__{room.name}",
+                                {"locked_target": eco_target_for_ai, "last_seen_target": eco_target_for_ai},
+                            )
+                            lock_rt["locked_target"] = eco_target_for_ai
+                            lock_rt["last_seen_target"] = eco_target_for_ai
+                            if room.heat_pump:
+                                await self._async_set_hvac_mode_if_needed(
+                                    room.heat_pump,
+                                    HVACMode.HEAT,
+                                    actions,
+                                )
+                                await self._async_set_temperature_if_needed(
+                                    room.heat_pump,
+                                    eco_target_for_ai,
+                                    actions,
+                                    force=True,
+                            )
+                            for rad in room.radiators:
+                                await self._async_set_temperature_if_needed(
+                                    rad,
+                                    eco_radiator_target,
+                                    actions,
+                                    force=True,
+                                )
+                            if room.radiators and eco_radiator_target < eco_target_for_ai:
+                                actions.append(
+                                    f"{room.name}: eco HP billigst -> radiatorer holdes lavere ({eco_radiator_target}C)"
+                                )
+                    elif rt.get("eco_active", False):
+                        rt["eco_active"] = False
+                        rt["eco_last_change"] = now_ts
+                        actions.append(
+                            f"{room.name}: eco slået fra mens AI afventer beslutning"
+                        )
+                    if room.opening_active and room.opening_pause_enabled:
+                        rt["closed_since"] = None
+                        if rt.get("open_since") is None:
+                            rt["open_since"] = now_ts
+                        if (
+                            room.heat_pump
+                            and not rt.get("paused_by_open")
+                            and _minutes_since(rt.get("open_since"), now_ts) >= room.pause_after_open_min
+                        ):
+                            hp_state = self.hass.states.get(room.heat_pump)
+                            if hp_state and hp_state.state not in ("off", "unknown", "unavailable"):
+                                rt["last_hvac_mode"] = hp_state.state
+                                await self._async_set_hvac_mode_if_needed(
+                                    room.heat_pump,
+                                    HVACMode.OFF,
+                                    actions,
+                                )
+                                rt["paused_by_open"] = True
+                                rt["last_switch"] = now_ts
+                                actions.append(
+                                    f"{room.name}: dør/vindue åben i {int(room.pause_after_open_min)} min -> varmepumpe pause"
+                                )
+                        continue
+                    if not (room.heat_pump and rt.get("paused_by_open")):
+                        rt["open_since"] = None
+                    else:
+                        rt["open_since"] = None
+                        if rt.get("closed_since") is None:
+                            rt["closed_since"] = now_ts
+                        if (
+                            (not room.opening_pause_enabled)
+                            or _minutes_since(rt.get("closed_since"), now_ts) >= room.resume_after_closed_min
+                        ):
+                            restore = str(rt.get("last_hvac_mode", "heat"))
+                            if restore not in {"heat", "cool", "auto", "dry", "fan_only", "heat_cool"}:
+                                restore = "heat"
+                            await self._async_set_hvac_mode_if_needed(
+                                room.heat_pump,
+                                HVACMode(restore),
+                                actions,
+                            )
+                            rt["paused_by_open"] = False
+                            rt["last_switch"] = now_ts
+                            actions.append(
+                                f"{room.name}: dørpause afsluttet -> varmepumpe genstartet mens AI afventer beslutning"
+                            )
+                            continue
+                        continue
+                    if eco_room_enabled and rt.get("eco_active", False):
+                        continue
+                    linked_surplus_max, linked_hot_room_names = _served_overheat_info(
+                        room,
+                        room.massive_overheat_c,
+                    )
+                    if linked_hot_room_names and linked_surplus_max >= room.massive_overheat_c:
+                        hp_state = self.hass.states.get(room.heat_pump)
+                        if hp_state and hp_state.state not in ("off", "unknown", "unavailable"):
+                            await self._async_set_hvac_mode_if_needed(
+                                room.heat_pump,
+                                HVACMode.OFF,
+                                actions,
+                            )
+                            rt["last_switch"] = now_ts
+                        rt["heat_hold_until"] = None
+                        rt["stop_candidate_since"] = None
+                        rt["overheat_since"] = rt.get("overheat_since") or now_ts
+                        rt["overheat_off_until"] = now_ts + (max(10.0, room.anti_short_cycle_min * 3.0) * 60.0)
+                        rt["last_control_decision"] = "linked_overheat_off"
+                        rt["last_control_decision_ts"] = now_ts
+                        rt["last_control_surplus"] = round(linked_surplus_max, 3)
+                        rt["last_control_deficit"] = round(room.deficit, 3)
+                        actions.append(
+                            f"{room.name}: serveret rum med massiv overvarme ({', '.join(linked_hot_room_names)}) -> varmepumpe OFF mens AI afventer beslutning"
+                        )
+                        continue
+                    effective_gap = max(float(room.deficit), float(room.comfort_gap))
+                    if effective_gap >= 0.15:
+                        if rt.get("fallback_deficit_since") is None:
+                            rt["fallback_deficit_since"] = now_ts
+                    else:
+                        rt["fallback_deficit_since"] = None
+                    fallback_deficit_min = _minutes_since(rt.get("fallback_deficit_since"), now_ts)
+                    fallback_radiator_needed = bool(effective_gap >= 0.5 or fallback_deficit_min >= 20.0)
+                    if room.heat_pump and heat_pump_cheaper:
+                        shared_deficit = 0.0
+                        served_rooms = _heat_pump_served_rooms(room)
+                        if served_rooms:
+                            shared_deficit = max(
+                                [float(r.deficit) for r in served_rooms]
+                                or [0.0]
+                            )
+                        hp_need = max(effective_gap, shared_deficit)
+                        if hp_need >= 0.15:
+                            hp_boost = 1.0 if hp_need < 0.5 else 1.5
+                            hp_target = round(max(16.0, min(30.0, room.target + hp_boost)), decimals)
+                            await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                            await self._async_set_temperature_if_needed(room.heat_pump, hp_target, actions)
+                            if shared_deficit > effective_gap:
+                                actions.append(
+                                    f"{room.name}: lokal fallback -> varmepumpe hjælper linket rum ({hp_target}C)"
+                                )
+                            else:
+                                actions.append(
+                                    f"{room.name}: lokal fallback -> varmepumpe løftet til {hp_target}C"
+                                )
+                    if room.radiators:
+                        if room.heat_pump and heat_pump_cheaper and not fallback_radiator_needed:
+                            rad_target = round(max(7.0, min(25.0, room.target - 1.0)), decimals)
+                            actions.append(
+                                f"{room.name}: HP billigst -> radiatorer holdes som backup ({rad_target}C)"
+                            )
+                        else:
+                            rad_target = round(max(7.0, min(25.0, room.target)), decimals)
+                            if fallback_radiator_needed:
+                                actions.append(
+                                    f"{room.name}: lokalt varmeunderskud -> radiator assist ({rad_target}C)"
+                                )
+                        for rad in room.radiators:
+                            await self._async_set_temperature_if_needed(rad, rad_target, actions)
+            if enabled and ai_provider_ready and not ai_control_waiting_for_decision:
                 try:
                     allow_heat_pumps = (not price_awareness) or heat_pump_cheaper
                     thermostat_handover = bool(price_awareness and not allow_heat_pumps)
@@ -3589,6 +4056,20 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         actions.append(
                             f"Lav AI-konfidens ({round(self._ai_confidence,1)}% < {round(confidence_threshold,1)}%)"
                         )
+                    structured_global = (
+                        self._ai_structured_decision.get("global", {})
+                        if isinstance(self._ai_structured_decision, dict)
+                        else {}
+                    )
+                    if not isinstance(structured_global, dict):
+                        structured_global = {}
+                    ai_global_mode = str(structured_global.get("mode", "")).strip().lower()
+                    ai_heat_weight = max(0.7, min(1.3, float(self._ai_factor or 1.0)))
+                    if ai_global_mode == "boost":
+                        ai_heat_weight = min(1.35, ai_heat_weight + 0.15)
+                    elif ai_global_mode in {"eco", "away", "night"}:
+                        ai_heat_weight = max(0.65, ai_heat_weight - 0.15)
+                    ai_cool_bias = max(0.0, 1.0 - ai_heat_weight)
                     adjacent_to_heat_pump: set[str] = set()
                     adjacent_hp_bias: dict[str, dict[str, float]] = {}
                     for hp_room in rooms:
@@ -3631,6 +4112,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "eco_last_change": None,
                             "heat_hold_until": None,
                             "stop_candidate_since": None,
+                            "fallback_deficit_since": None,
+                            "hp_idle_since": None,
+                            "overheat_off_until": None,
+                            "last_control_decision": None,
+                            "last_control_decision_ts": None,
+                            "last_control_surplus": None,
+                            "last_control_deficit": None,
+                            "learn_overheat_preheat_margin_c": 0.0,
+                            "learn_overheat_coast_extra_c": 0.0,
+                            "learn_overheat_idle_delay_min": 0.0,
                         }
                         rt = self._room_runtime.setdefault(room.name, dict(room_rt_defaults))
                         for key, value in room_rt_defaults.items():
@@ -3798,35 +4289,97 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 rt["last_switch"] = now_ts
                             continue
             
-                        # Room Eco fallback: if no target number is configured, keep legacy direct control.
-                        if eco_room_enabled and rt.get("eco_active", False) and not room.target_number_entity:
+                        # Active room ECO must also drive the climate entity directly.
+                        # A target helper alone is too soft for heat pumps that beep/keep
+                        # heating until their own setpoint is lowered.
+                        if eco_room_enabled and rt.get("eco_active", False):
                             eco_setpoint = round(max(7.0, min(25.0, room.eco_target)), decimals)
+                            eco_radiator_target = round(
+                                max(
+                                    7.0,
+                                    min(
+                                        25.0,
+                                        eco_setpoint - (1.0 if heat_pump_cheaper and room.heat_pump else 0.0),
+                                    ),
+                                ),
+                                decimals,
+                            )
                             if room.heat_pump:
                                 # Deadband around eco target to avoid toggling noise.
                                 if room.temperature >= (room.eco_target + 0.1):
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
-                                    await self._async_set_temperature_if_needed(room.heat_pump, eco_setpoint, actions)
+                                    await self._async_set_temperature_if_needed(
+                                        room.heat_pump,
+                                        eco_setpoint,
+                                        actions,
+                                        force=True,
+                                    )
                                     actions.append(f"{room.name}: eco coast aktiv ved lavt setpoint")
                                 elif room.temperature <= (room.eco_target - 0.3):
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
-                                    await self._async_set_temperature_if_needed(room.heat_pump, eco_setpoint, actions)
+                                    await self._async_set_temperature_if_needed(
+                                        room.heat_pump,
+                                        eco_setpoint,
+                                        actions,
+                                        force=True,
+                                    )
                                 else:
-                                    await self._async_set_temperature_if_needed(room.heat_pump, eco_setpoint, actions)
+                                    await self._async_set_temperature_if_needed(
+                                        room.heat_pump,
+                                        eco_setpoint,
+                                        actions,
+                                        force=True,
+                                    )
                             for rad in room.radiators:
-                                await self._async_set_temperature_if_needed(rad, eco_setpoint, actions)
+                                await self._async_set_temperature_if_needed(
+                                    rad,
+                                    eco_radiator_target,
+                                    actions,
+                                    force=True,
+                                )
+                            if room.radiators and eco_radiator_target < eco_setpoint:
+                                actions.append(
+                                    f"{room.name}: eco HP billigst -> radiatorer holdes lavere ({eco_radiator_target}C)"
+                                )
                             continue
             
-                        linked_hot = False
-                        if room.link_group:
-                            peers = [r for r in rooms if r.link_group and r.link_group == room.link_group]
-                            linked_hot = any((p.temperature >= (p.target + flow_limit_margin)) for p in peers)
+                        served_rooms = _heat_pump_served_rooms(room)
+                        linked_surplus_max, linked_hot_room_names = _served_overheat_info(
+                            room,
+                            room.massive_overheat_c,
+                        )
+                        linked_hot = any(
+                            peer.temperature >= (peer.target + flow_limit_margin)
+                            for peer in served_rooms
+                        )
             
                         raw_surplus = max(0.0, float(room.raw_temperature) - float(room.target))
-                        hp_control_surplus = raw_surplus if room.heat_pump else room.surplus
+                        hp_control_surplus = (
+                            max(raw_surplus, linked_surplus_max)
+                            if room.heat_pump
+                            else room.surplus
+                        )
+                        linked_massive_overheat_active = bool(
+                            room.heat_pump
+                            and linked_hot_room_names
+                            and linked_surplus_max >= room.massive_overheat_c
+                        )
+                        overheat_release_surplus_c = max(
+                            0.2,
+                            room.massive_overheat_c - 0.5,
+                        )
 
-                        if hp_control_surplus >= room.massive_overheat_c:
+                        if linked_massive_overheat_active and rt["overheat_since"] is None:
+                            rt["overheat_since"] = now_ts - (room.massive_overheat_min * 60.0)
+                        elif hp_control_surplus >= room.massive_overheat_c:
                             if rt["overheat_since"] is None:
                                 rt["overheat_since"] = now_ts
+                        elif (
+                            rt["overheat_since"] is not None
+                            and _minutes_since(rt["overheat_since"], now_ts) >= room.massive_overheat_min
+                            and hp_control_surplus >= overheat_release_surplus_c
+                        ):
+                            pass
                         else:
                             rt["overheat_since"] = None
             
@@ -3837,11 +4390,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
                         error = room.target - room.temperature
                         effective_deficit = room.deficit
-                        shared_demand_rooms: list[RoomSnapshot] = []
-                        if room.link_group:
-                            shared_demand_rooms.extend(
-                                [r for r in rooms if r.name != room.name and r.link_group == room.link_group]
-                            )
+                        shared_demand_rooms: list[RoomSnapshot] = list(served_rooms)
                         if room.heat_pump:
                             hp_slug = _slug_text(str(room.heat_pump).split(".", 1)[-1])
                             for slug, r in room_slug_map.items():
@@ -3868,7 +4417,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             shared_demand_active_for_hp = bool(
                                 room.heat_pump
                                 and shared_deficit_max >= 0.08
-                                and raw_surplus < (room.massive_overheat_c + 0.6)
+                                and hp_control_surplus < overheat_release_surplus_c
                             )
                         comfort_effective_gap = max(float(room.deficit), float(room.comfort_gap))
                         comfort_gap_extra = max(0.0, float(room.comfort_gap) - float(room.deficit))
@@ -3881,6 +4430,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         if comfort_bias_active:
                             effective_deficit = max(effective_deficit, comfort_effective_gap)
+                        effective_deficit = max(0.0, float(effective_deficit) * ai_heat_weight)
                         learn_start_offset = float(rt.get("learn_start_offset", 0.0))
                         learn_stop_offset = float(rt.get("learn_stop_offset", 0.0))
                         effective_room_direction_bias = (
@@ -3921,9 +4471,99 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                         if shared_demand_active_for_hp:
                             effective_start_threshold = min(effective_start_threshold, 0.08)
+                        if ai_cool_bias > 0.0 and room.surplus > 0.0:
+                            stop_threshold = max(0.05, stop_threshold - min(0.35, ai_cool_bias * 0.8))
                         min_hold_minutes = 60.0
                         hold_surplus_release_c = 1.0
                         stop_temp_surplus_c = 1.0
+                        learn_overheat_preheat_margin_c = max(
+                            0.0,
+                            min(0.5, float(rt.get("learn_overheat_preheat_margin_c", 0.0) or 0.0)),
+                        )
+                        learn_overheat_coast_extra_c = max(
+                            0.0,
+                            min(1.0, float(rt.get("learn_overheat_coast_extra_c", 0.0) or 0.0)),
+                        )
+                        learn_overheat_idle_delay_min = max(
+                            -6.0,
+                            min(10.0, float(rt.get("learn_overheat_idle_delay_min", 0.0) or 0.0)),
+                        )
+                        if learning_enabled and room.learning_enabled:
+                            previous_decision = str(rt.get("last_control_decision") or "")
+                            previous_decision_ts = _safe_float(rt.get("last_control_decision_ts"))
+                            previous_surplus = _safe_float(rt.get("last_control_surplus"))
+                            if previous_decision_ts is not None and previous_decision in {
+                                "overheat_off",
+                                "overheat_coast",
+                                "overheat_preheat",
+                            }:
+                                decision_age_min = _minutes_since(previous_decision_ts, now_ts)
+                                if decision_age_min >= 5.0:
+                                    if previous_decision == "overheat_off" and room.deficit > 0.05:
+                                        learn_overheat_preheat_margin_c = min(
+                                            0.5,
+                                            learn_overheat_preheat_margin_c + 0.05,
+                                        )
+                                        learn_overheat_idle_delay_min = min(
+                                            10.0,
+                                            learn_overheat_idle_delay_min + 1.0,
+                                        )
+                                        actions.append(
+                                            f"{room.name}: learning -> starter tidligere efter overheat OFF"
+                                        )
+                                        rt["last_control_decision"] = None
+                                    elif (
+                                        previous_decision == "overheat_off"
+                                        and decision_age_min >= 20.0
+                                        and room.surplus > 0.8
+                                    ):
+                                        learn_overheat_preheat_margin_c = max(
+                                            0.0,
+                                            learn_overheat_preheat_margin_c - 0.02,
+                                        )
+                                        actions.append(
+                                            f"{room.name}: learning -> OFF holdt stadig varmeoverskud"
+                                        )
+                                        rt["last_control_decision"] = None
+                                    elif (
+                                        previous_decision == "overheat_coast"
+                                        and decision_age_min >= 12.0
+                                        and previous_surplus is not None
+                                        and room.surplus >= previous_surplus - 0.1
+                                    ):
+                                        learn_overheat_coast_extra_c = min(
+                                            1.0,
+                                            learn_overheat_coast_extra_c + 0.1,
+                                        )
+                                        actions.append(
+                                            f"{room.name}: learning -> coast sænkes lidt mere næste gang"
+                                        )
+                                        rt["last_control_decision"] = None
+                                    elif (
+                                        previous_decision == "overheat_preheat"
+                                        and decision_age_min >= 15.0
+                                        and room.surplus > 0.6
+                                    ):
+                                        learn_overheat_preheat_margin_c = max(
+                                            0.0,
+                                            learn_overheat_preheat_margin_c - 0.02,
+                                        )
+                                        actions.append(
+                                            f"{room.name}: learning -> blød genstart kan vente lidt længere"
+                                        )
+                                        rt["last_control_decision"] = None
+                                    rt["learn_overheat_preheat_margin_c"] = round(
+                                        learn_overheat_preheat_margin_c,
+                                        3,
+                                    )
+                                    rt["learn_overheat_coast_extra_c"] = round(
+                                        learn_overheat_coast_extra_c,
+                                        3,
+                                    )
+                                    rt["learn_overheat_idle_delay_min"] = round(
+                                        learn_overheat_idle_delay_min,
+                                        2,
+                                    )
             
                         hp_room_offset = 0.0
                         if effective_deficit >= 1.2:
@@ -3936,6 +4576,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             hp_room_offset = -1.0
                         elif hp_control_surplus > 0.0:
                             hp_room_offset = -1.0
+                        if hp_room_offset > 0.0:
+                            hp_room_offset = round(hp_room_offset * ai_heat_weight, 2)
+                        elif hp_room_offset < 0.0 and room.surplus > 0.0:
+                            hp_room_offset = round(hp_room_offset * (1.0 + min(0.5, ai_cool_bias)), 2)
             
                         pid_output = 0.0
                         if pid_enabled:
@@ -3969,6 +4613,22 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                         if hp_internal_temp is not None:
                             hp_internal_bias = hp_internal_temp - room.temperature
+                        hp_hvac_action = str((hp_state.attributes if hp_state else {}).get("hvac_action", "")).lower()
+                        hp_power_active = bool(
+                            room.heat_pump_power_w is not None and float(room.heat_pump_power_w) >= 120.0
+                        )
+                        hp_delivering_heat = bool(
+                            room.heat_pump
+                            and (
+                                hp_hvac_action in {"heating", "preheating"}
+                                or hp_power_active
+                            )
+                        )
+                        if room.heat_pump:
+                            if hp_delivering_heat:
+                                rt["hp_idle_since"] = None
+                            elif rt.get("hp_idle_since") is None:
+                                rt["hp_idle_since"] = now_ts
             
                         if effective_deficit >= effective_start_threshold:
                             if rt.get("deficit_since") is None:
@@ -3982,6 +4642,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
                         if linked_hot or hp_control_surplus >= stop_threshold:
                             hp_target = round(room.target, decimals)
+
+                        overheat_off_until = _safe_float(rt.get("overheat_off_until"))
+                        overheat_off_locked = bool(overheat_off_until is not None and overheat_off_until > now_ts)
+                        overheat_preheat_margin_c = max(
+                            0.1,
+                            min(0.55, (room.start_deficit_c * 0.5) + learn_overheat_preheat_margin_c),
+                        )
+                        overheat_preheat_ready = bool(
+                            overheat_off_locked
+                            and hp_control_surplus <= overheat_preheat_margin_c
+                        )
             
                         allow_start = (
                             effective_deficit >= effective_start_threshold
@@ -3998,6 +4669,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         if room_hybrid_takeover_heat:
                             allow_start = True
+                        if overheat_preheat_ready and allow_heat_pumps:
+                            allow_start = True
+                            rt["overheat_off_until"] = None
+                            hp_target = round(max(16.0, min(30.0, room.target)), decimals)
+                            rt["last_control_decision"] = "overheat_preheat"
+                            rt["last_control_decision_ts"] = now_ts
+                            rt["last_control_surplus"] = round(hp_control_surplus, 3)
+                            rt["last_control_deficit"] = round(room.deficit, 3)
+                            actions.append(
+                                f"{room.name}: overvarme-off frigivet før underskud -> blød genstart ved {hp_target}C"
+                            )
                         if force_off_by_ai:
                             allow_start = False
                         if low_confidence:
@@ -4051,7 +4733,66 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     )
                             else:
                                 stop_temp_threshold = max(stop_threshold, stop_temp_surplus_c)
-                                if shared_demand_active_for_hp and allow_heat_pumps:
+                                if massive_overheat_active:
+                                    overheat_age_min = _minutes_since(rt.get("overheat_since"), now_ts)
+                                    hp_idle_min = _minutes_since(rt.get("hp_idle_since"), now_ts)
+                                    smart_off_delay_min = max(6.0, min(20.0, room.massive_overheat_min * 0.5))
+                                    hp_idle_before_off_min = max(
+                                        6.0,
+                                        (room.anti_short_cycle_min * 2.0) + learn_overheat_idle_delay_min,
+                                    )
+                                    overheat_should_power_off = bool(
+                                        overheat_off_locked
+                                        or linked_massive_overheat_active
+                                        or (
+                                            overheat_age_min >= (room.massive_overheat_min + smart_off_delay_min)
+                                            and hp_idle_min >= hp_idle_before_off_min
+                                            and not hp_delivering_heat
+                                        )
+                                    )
+                                    overheat_coast_drop_c = min(
+                                        3.0,
+                                        max(1.0, hp_control_surplus * 0.5) + learn_overheat_coast_extra_c,
+                                    )
+                                    overheat_coast_target = round(
+                                        max(16.0, min(30.0, room.target - overheat_coast_drop_c)),
+                                        decimals,
+                                    )
+                                    rt["heat_hold_until"] = None
+                                    rt["stop_candidate_since"] = None
+                                    if overheat_should_power_off:
+                                        hp_was_running = bool(hp_state and hp_state.state != "off")
+                                        await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                                        rt["overheat_off_until"] = now_ts + (max(10.0, room.anti_short_cycle_min * 3.0) * 60.0)
+                                        if hp_was_running:
+                                            rt["last_switch"] = now_ts
+                                        if rt.get("last_control_decision") != "overheat_off":
+                                            rt["last_control_decision"] = "overheat_off"
+                                            rt["last_control_decision_ts"] = now_ts
+                                            rt["last_control_surplus"] = round(hp_control_surplus, 3)
+                                            rt["last_control_deficit"] = round(room.deficit, 3)
+                                        if linked_massive_overheat_active:
+                                            actions.append(
+                                                f"{room.name}: linket massiv overvarme i {', '.join(linked_hot_room_names)} -> varmepumpe OFF indtil gruppen er kølet ned"
+                                            )
+                                        else:
+                                            actions.append(
+                                                f"{room.name}: lang massiv overvarme + idle HP -> varmepumpe OFF indtil overskud er under {overheat_preheat_margin_c:.1f}C"
+                                            )
+                                    else:
+                                        await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                        await self._async_set_temperature_if_needed(
+                                            room.heat_pump, overheat_coast_target, actions
+                                        )
+                                        if rt.get("last_control_decision") != "overheat_coast":
+                                            rt["last_control_decision"] = "overheat_coast"
+                                            rt["last_control_decision_ts"] = now_ts
+                                            rt["last_control_surplus"] = round(hp_control_surplus, 3)
+                                            rt["last_control_deficit"] = round(room.deficit, 3)
+                                        actions.append(
+                                            f"{room.name}: massiv overvarme -> varmepumpe skruet ned til {overheat_coast_target}C"
+                                        )
+                                elif shared_demand_active_for_hp and allow_heat_pumps:
                                     assist_offset = min(1.0, max(0.0, shared_deficit_max) * 8.0)
                                     assist_target = round(
                                         max(16.0, min(30.0, room.target + assist_offset)),
@@ -4091,35 +4832,44 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 hold_active = bool(hold_until is not None and hold_until > now_ts)
                                 hold_break_surplus = max(stop_temp_threshold + hold_surplus_release_c, 1.6)
                                 high_surplus_now = room.surplus >= hold_break_surplus
-                                coast_offset = 1.0 if room.surplus < (stop_temp_threshold + 1.5) else 2.0
-                                coast_target = round(max(16.0, min(30.0, room.target - coast_offset)), decimals)
+                                coast_target = round(max(16.0, min(30.0, room.target)), decimals)
+                                ai_prefers_power_off = bool(
+                                    ai_heat_weight <= 0.95
+                                    and room.surplus >= max(0.6, stop_temp_threshold - 0.1)
+                                    and not stop_due_to_price
+                                    and not shared_demand_active_for_hp
+                                    and not massive_overheat_active
+                                )
                                 modulate_when_cheap = bool(
                                     stop_due_to_temp
                                     and not stop_due_to_price
                                     and allow_heat_pumps
                                     and not massive_overheat_active
                                 )
-                                if modulate_when_cheap:
+                                if ai_prefers_power_off and (stop_stable or high_surplus_now):
+                                    hp_was_running = bool(hp_state and hp_state.state != "off")
+                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                                    rt["stop_candidate_since"] = None
+                                    rt["heat_hold_until"] = None
+                                    if hp_was_running:
+                                        rt["last_switch"] = now_ts
+                                    actions.append(
+                                        f"{room.name}: AI-daempning ({ai_heat_weight:.2f}) + over maal -> varmepumpe OFF"
+                                    )
+                                elif modulate_when_cheap:
                                     rt["stop_candidate_since"] = None
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                     await self._async_set_temperature_if_needed(room.heat_pump, coast_target, actions)
                                     await self._async_set_fan_mode_if_needed(room.heat_pump, hp_fan_preferred, actions)
                                     actions.append(
-                                        f"{room.name}: billig AC -> modulerer (coast {coast_target}°C) i stedet for OFF"
+                                        f"{room.name}: billig AC -> holder ved setpoint ({coast_target}C) i stedet for OFF"
                                     )
-                                elif massive_overheat_active:
-                                    hp_was_running = bool(hp_state and hp_state.state != "off")
-                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
-                                    rt["heat_hold_until"] = None
-                                    rt["stop_candidate_since"] = None
-                                    if hp_was_running:
-                                        rt["last_switch"] = now_ts
                                 elif stop_stable and (not hold_active or high_surplus_now):
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                     await self._async_set_temperature_if_needed(room.heat_pump, coast_target, actions)
                                     rt["stop_candidate_since"] = None
                                     actions.append(
-                                        f"{room.name}: stabilt stopbehov -> coast {coast_target}°C i stedet for OFF"
+                                        f"{room.name}: stabilt stopbehov -> holder ved setpoint ({coast_target}C) i stedet for OFF"
                                     )
                                 elif stop_request and hold_active:
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
@@ -4141,6 +4891,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 hp_off = bool(hp_state and hp_state.state == "off")
                                 if (
                                     hp_off
+                                    and not massive_overheat_active
                                     and not room.occupancy_active
                                     and not vacuum_running
                                     and _minutes_since(rt.get("last_switch"), now_ts) >= 3
@@ -4170,7 +4921,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     rt["learn_cold_hits"] = 0
 
                         if thermostat_handover:
-                            if room.heat_pump and not room_hybrid_takeover_heat:
+                            if room.heat_pump and massive_overheat_active:
+                                actions.append(
+                                    f"{room.name}: thermostat takeover sprunget over pga. massiv overvarme"
+                                )
+                            elif room.heat_pump and not room_hybrid_takeover_heat:
                                 takeover_coast_target = round(max(16.0, min(30.0, room.target - 2.0)), decimals)
                                 await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                 await self._async_set_temperature_if_needed(
@@ -4184,6 +4939,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     demand_names = ", ".join(r.name for r in shared_demand_rooms if r.deficit > 0)
                                     if demand_names:
                                         actions.append(f"{room.name}: delt varmebehov fra {demand_names}")
+                            elif room.heat_pump and massive_overheat_active:
+                                pass
                             else:
                                 actions.append(
                                     f"{room.name}: thermostat takeover (AC dyrere end alternativ, coast beholdt)"
@@ -4314,6 +5071,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 if guard_target > rad_target:
                                     rad_target = guard_target
                                     actions.append(f"{room.name}: eco hard-floor løftede radiator-target")
+                        if massive_overheat_active:
+                            rad_target = 7.0 if overheat_off_locked else round(max(7.0, min(25.0, room.target - 2.0)), decimals)
+                            actions.append(f"{room.name}: massiv overvarme -> radiatorer sænket til {rad_target}C")
                         for rad in room.radiators:
                             await self._async_set_temperature_if_needed(rad, rad_target, actions)
             
@@ -4326,6 +5086,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 "setpunkt": hp_target if room.heat_pump else None,
                                 "learn_start_offset": round(float(rt.get("learn_start_offset", 0.0)), decimals),
                                 "learn_stop_offset": round(float(rt.get("learn_stop_offset", 0.0)), decimals),
+                                "learn_overheat_preheat_margin_c": round(
+                                    float(rt.get("learn_overheat_preheat_margin_c", 0.0)),
+                                    3,
+                                ),
+                                "learn_overheat_coast_extra_c": round(
+                                    float(rt.get("learn_overheat_coast_extra_c", 0.0)),
+                                    3,
+                                ),
+                                "learn_overheat_idle_delay_min": round(
+                                    float(rt.get("learn_overheat_idle_delay_min", 0.0)),
+                                    2,
+                                ),
+                                "last_control_decision": rt.get("last_control_decision"),
                             }
                         )
                 except Exception as err:  # noqa: BLE001
@@ -4347,7 +5120,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if actions:
                     actions.append("AI OFF: radiatorer følger AI-mål, AC styres manuelt")
             
-            if enabled and ai_provider_ready and _minutes_since(self._runtime_events.get("last_control_activity"), now_ts) >= 30:
+            if (
+                enabled
+                and ai_provider_ready
+                and not ai_control_waiting_for_decision
+                and _minutes_since(self._runtime_events.get("last_control_activity"), now_ts) >= 30
+            ):
                 coldest = next((r for r in sorted(rooms, key=lambda x: x.deficit, reverse=True) if r.heat_pump), None)
                 if coldest and coldest.deficit > 0.3:
                     await self._async_set_hvac_mode_if_needed(coldest.heat_pump, HVACMode.HEAT, actions)
@@ -4470,6 +5248,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 "ai_decision_source": self._ai_decision_source,
                 "ai_decision_source_display": _ai_decision_source_display(self._ai_decision_source),
+                "ai_control_waiting_for_decision": ai_control_waiting_for_decision,
                 "ai_prev_decision_source": self._ai_prev_decision_source,
                 "ai_prev_decision_source_display": _ai_decision_source_display(self._ai_prev_decision_source),
                 "ai_decision_transition": (
