@@ -2,85 +2,68 @@
 
 ![AI Varme Styring logo](logo.png)
 
-Local Home Assistant integration for AI-based heating control with OpenClaw, MQTT-backed decision delivery, and room-aware comfort control.
+Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.21**
+**Current version: 0.3.22**
 
 ## Highlights
 
-- OpenClaw-based heating decisions with machine-readable JSON output
-- MQTT-backed decision delivery for stable Home Assistant adoption
+- OpenClaw Conversation-based heating decisions with machine-readable JSON output
+- Price-aware AI decisions that can lean toward the cheapest heat source
+- Stabilized room overrides to reduce unnecessary heat-pump beeps and flip-flopping
 - Fixed AI setpoint ownership: your room target stays the main target
 - Optional Comfort Mode that adjusts internal behavior without rewriting your target
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.21
+## What is new in v0.3.22
 
-### 0.3.21 control stability and room-link behavior
+### 1. OpenClaw Conversation is now the primary path
 
-- Heat-pump rooms now include `room_adjacent_rooms` directly in shared-demand start logic.
-- Stale OpenClaw room mode overrides are now cleared reliably each cycle.
-- Heat-pump overheat/stop decisions now use raw room surplus for better real-world behavior.
-- Opening-pause flow now dampens heat pumps immediately when room temperature is above target.
-- Cheap-power fan preference (`heat_pump_cheap_fan_mode`) is now actively applied during heat/coast control.
-- Shared-demand logic now keeps linked heat pumps active instead of dropping to a passive coast path too early.
+- AI Varme Styring can now use the `openclaw_conversation` integration directly as its OpenClaw decision engine.
+- The normal heating decision path no longer relies on MQTT delivery or a separate bridge service.
+- Decision source and transport are visible in the AI report so you can verify that the live decision came from OpenClaw Conversation.
 
-### 1. MQTT-first OpenClaw decision path
+### 2. Cost-aware payloads are now sent to OpenClaw
 
-The OpenClaw heating flow can now publish finished decisions to MQTT and let Home Assistant consume the structured result from:
+- OpenClaw now receives richer price and runtime context, including:
+  - `cheapest_heat_source`
+  - `cheapest_alt_name`
+  - `cheapest_alt_price`
+  - `heat_pump_cheaper`
+  - `estimated_savings_per_kwh`
+  - daily and monthly savings estimates
 
-- `homeassistant/ai_varme/openclaw/decision`
+This makes the AI decision more useful when the real goal is to save money without sacrificing comfort.
 
-This makes the decision chain easier to observe and more robust than instruction-wrapper style hooks.
+### 3. Better reports in Home Assistant
 
-### 1b. OpenClaw auth and setup flow
+- The AI report is now easier to read and structured into sections such as:
+  - `Kort resume`
+  - `Aktiv beslutning`
+  - `Hvorfor blev den taget?`
+  - `Kontekst`
+  - `Diagnostik`
+  - `Rum-beslutninger`
 
-The OpenClaw setup flow now accepts a normal webhook URL directly when OpenClaw is used as the primary engine.
-You no longer have to hit a dead-end validation path that asked for hidden bridge or enable flags.
+- Danish text and room names are cleaned more aggressively so mojibake does not leak into dashboard cards.
 
-Authentication can now use either:
+### 4. More stable control behavior
 
-- `OpenClaw token`
-- `OpenClaw kode/password`
+- Small AI target adjustments are now held back unless they are actually urgent.
+- Tiny target changes are ignored.
+- Non-urgent mode flips are delayed.
 
-If both are set, token is preferred.
+This reduces repeated commands and helps avoid unnecessary beeps from heat pumps.
 
-### 1c. Hook payload compatibility
+## Recommended setup
 
-OpenClaw webhook requests now duplicate the heating payload as top-level fields and as nested `context`, `input`, and `heating_context` objects.
-This makes new OpenClaw instances more robust when their runtime wrapper expects the heating telemetry in a specific location.
-
-Malformed OpenClaw outputs are also rejected earlier if `global`, `rooms`, `diagnostics`, or `input_summary` come back in the wrong shape.
-
-### 1d. Presence only for ECO mode
-
-Presence and occupancy are now reserved for ECO behavior only.
-They no longer bias OpenClaw room priority, comfort reasoning, or normal heating decisions outside ECO mode.
-
-### 2. Fixed room target ownership
-
-The room AI setpoint is now treated as the user-owned main target.
-The runtime may optimize heat pump and radiator behavior around it, but it must not silently rewrite the helper target.
-
-### 3. Comfort Mode
-
-Comfort Mode is now a separate switchable behavior layer.
-
-- When it is `off`, the room AI setpoint stays fixed and comfort bias is inactive.
-- When it is `on`, humidity, occupancy, comfort gap, and opening state may slightly influence internal heating behavior.
-- Comfort Mode does not overwrite the room target helper.
-
-### 4. Better AI report quality
-
-The AI report now exposes more of the real decision context:
-
-- last decision time
-- request and run identifiers
-- decision reason
-- diagnostics summary
-- override reasoning
-- comfort notes
+1. Install **AI Varme Styring**
+2. Install and configure **OpenClaw Conversation**
+3. Select OpenClaw as the AI decision engine in AI Varme Styring
+4. Trigger an AI review and confirm the report shows:
+   - `Beslutningsmotor: OpenClaw`
+   - `AI-kilde nu: OpenClaw conversation`
 
 ## Installation with HACS
 
@@ -109,9 +92,11 @@ Finished OpenClaw heating decisions are expected to look like this:
 }
 ```
 
-## OpenClaw and MQTT setup
+## OpenClaw setup
 
-For the full OpenClaw setup guide, including the exact text block you can paste into OpenClaw-side tooling, see:
+For the conversation-based setup, use the `openclaw_conversation` integration in Home Assistant.
+
+Legacy MQTT setup notes are still kept here for older installs:
 
 - [`OPENCLAW_MQTT_SETUP.md`](OPENCLAW_MQTT_SETUP.md)
 
@@ -136,5 +121,4 @@ For the full OpenClaw setup guide, including the exact text block you can paste 
 ## Release docs
 
 - [`CHANGELOG.md`](CHANGELOG.md)
-- [`RELEASE_GUIDE.md`](RELEASE_GUIDE.md)
 - [`OPENCLAW_MQTT_SETUP.md`](OPENCLAW_MQTT_SETUP.md)
