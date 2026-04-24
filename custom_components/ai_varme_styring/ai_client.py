@@ -97,6 +97,29 @@ OPENCLAW_REQUEST_RE = re.compile(
 OPENCLAW_FACTOR_RE = re.compile(r'"factor"\s*:\s*(-?\d+(?:\.\d+)?)', re.I)
 OPENCLAW_CONFIDENCE_RE = re.compile(r'"confidence"\s*:\s*(-?\d+(?:\.\d+)?)', re.I)
 OPENCLAW_REASON_RE = re.compile(r'"reason"\s*:\s*"((?:\\.|[^"\\])*)"', re.I)
+_REASON_NOISE_PATTERNS = (
+    re.compile(r"(?:^|[.!?]\s+)[^.?!]*(?:bootstrap|vibe|emoji|agent\.md|memory\.md)[^.?!]*[.?!]?", re.I),
+)
+
+
+def _sanitize_reason_text(reason: str) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    noise_positions = [
+        lower.find(marker)
+        for marker in ("bootstrap", "vibe", "emoji", "agent.md", "memory.md")
+        if lower.find(marker) >= 0
+    ]
+    if noise_positions:
+        pos = min(noise_positions)
+        boundary = max(text.rfind(". ", 0, pos), text.rfind("! ", 0, pos), text.rfind("? ", 0, pos))
+        text = text[: boundary + 1] if boundary >= 0 else ""
+    for pattern in _REASON_NOISE_PATTERNS:
+        text = pattern.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    return (text + ".") if text else ""
 
 
 class AiProviderClient:
@@ -110,6 +133,7 @@ class AiProviderClient:
         confidence: float,
         data: dict[str, Any],
     ) -> tuple[float, str, float, dict[str, Any]]:
+        reason = _sanitize_reason_text(reason)
         rooms = payload.get("rooms") if isinstance(payload, dict) else None
         if not isinstance(rooms, list):
             return factor, reason, confidence, data
@@ -180,7 +204,7 @@ class AiProviderClient:
         updated['confidence'] = confidence
         meta = updated.get('_openclaw_meta') if isinstance(updated.get('_openclaw_meta'), dict) else {}
         updated['_openclaw_meta'] = {**meta, 'reason_reconciled': True}
-        return factor, reason, confidence, updated
+        return factor, _sanitize_reason_text(reason), confidence, updated
 
     def _candidate_results_files(self) -> list[Path]:
         paths: list[Path] = []
@@ -930,7 +954,7 @@ class AiProviderClient:
             raise ValueError("input_summary must be object when present")
         bounded_factor = max(0.6, min(1.4, float(factor)))
         bounded_confidence = max(0.0, min(100.0, float(confidence)))
-        return bounded_factor, reason.strip() or "AI standard", bounded_confidence
+        return bounded_factor, _sanitize_reason_text(reason) or "AI standard", bounded_confidence
 
     def _mqtt_sensor_decision(self) -> dict[str, Any] | None:
         """Read latest MQTT decision sensor as fallback when API call paths fail."""
