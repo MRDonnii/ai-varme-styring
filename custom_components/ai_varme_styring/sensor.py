@@ -18,6 +18,12 @@ from .const import DOMAIN
 from .entity import AiVarmeBaseEntity
 
 _MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e2", "\ufffd")
+_REASON_NOISE_PATTERNS = [
+    re.compile(
+        r"(?:^|[.!?]\s+)[^.?!]*(?:bootstrap|vibe|emoji|agent\.md|memory\.md)[^.?!]*[.?!]?",
+        re.I,
+    ),
+]
 
 
 def _num_or_zero(value: Any, decimals: int = 1) -> float:
@@ -132,6 +138,26 @@ def _fix_mojibake_text(value: Any) -> Any:
     return text
 
 
+def _sanitize_reason_text(value: Any) -> str:
+    text = _fix_mojibake_text(str(value or "").strip())
+    if not text:
+        return ""
+    lower = text.lower()
+    noise_positions = [
+        lower.find(marker)
+        for marker in ("bootstrap", "vibe", "emoji", "agent.md", "memory.md")
+        if lower.find(marker) >= 0
+    ]
+    if noise_positions:
+        pos = min(noise_positions)
+        boundary = max(text.rfind(". ", 0, pos), text.rfind("! ", 0, pos), text.rfind("? ", 0, pos))
+        text = text[: boundary + 1] if boundary >= 0 else ""
+    for pattern in _REASON_NOISE_PATTERNS:
+        text = pattern.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    return text or "AI standard"
+
+
 def _clean_text_tree(value: Any) -> Any:
     if isinstance(value, str):
         return _fix_mojibake_text(value)
@@ -195,6 +221,59 @@ def _room_summary_from_state(room: dict[str, Any]) -> str:
         parts.append(f"fugt {humidity:.0f}%")
     parts.append(f"varme: {heat_summary}")
     return _fix_mojibake_text(", ".join(parts) + ".")
+
+
+def _room_diagnostics_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = data.get("room_diagnostics", [])
+    if not isinstance(rows, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cleaned_row = _clean_text_tree(dict(row))
+        name = str(cleaned_row.get("name", "")).strip()
+        if not name:
+            continue
+        cleaned.append(cleaned_row)
+    return cleaned
+
+
+def _room_diagnostic_line(row: dict[str, Any]) -> str:
+    name = _fix_mojibake_text(str(row.get("name", "Rum")).strip()) or "Rum"
+    phase = _fix_mojibake_text(str(row.get("phase", "off")).strip()) or "off"
+    phase_reason = _fix_mojibake_text(str(row.get("phase_reason", "")).strip())
+    heat_mode = _fix_mojibake_text(str(row.get("heat_mode", "ingen")).strip()) or "ingen"
+    temp = _safe_float(row.get("temperature"))
+    target = _safe_float(row.get("target"))
+    deficit = max(_safe_float(row.get("deficit"), 0.0) or 0.0, 0.0)
+    surplus = max(_safe_float(row.get("surplus"), 0.0) or 0.0, 0.0)
+    comfort_gap = max(_safe_float(row.get("comfort_gap"), 0.0) or 0.0, 0.0)
+    trend = _safe_float(row.get("trend_c_per_h"))
+    parts = [f"{name}: fase {phase}", f"varme {heat_mode}"]
+    if temp is not None and target is not None:
+        parts.append(f"temp {temp:.1f}/{target:.1f}°C")
+    if deficit > 0.05:
+        parts.append(f"underskud {deficit:.1f}°C")
+    elif surplus > 0.05:
+        parts.append(f"overskud {surplus:.1f}°C")
+    else:
+        parts.append("tæt på mål")
+    if comfort_gap > 0.05:
+        parts.append(f"komfortgap {comfort_gap:.1f}°C")
+    if trend is not None:
+        parts.append(f"trend {trend:+.1f}°C/time")
+    if bool(row.get("opening_active")):
+        parts.append("åbning aktiv")
+    if bool(row.get("external_heat_active")):
+        parts.append("ekstern varme aktiv")
+    if phase_reason:
+        parts.append(f"årsag: {phase_reason}")
+    return _fix_mojibake_text(", ".join(parts))
+
+
+def _room_diagnostic_lines(data: dict[str, Any]) -> list[str]:
+    return _dedupe_lines([_room_diagnostic_line(row) for row in _room_diagnostics_rows(data)])
 
 
 def _filtered_report_points(data: dict[str, Any], report: dict[str, Any], bullets: list[Any]) -> list[str]:
@@ -333,6 +412,7 @@ def _format_report_long(
             f"Tørre rum: {_list_text(facts.get('dry_rooms'))}",
         ]
     )
+    room_diagnostic_lines = [f"- {line}" for line in _room_diagnostic_lines(data)]
 
     room_lines: list[str] = []
     room_summaries: set[str] = set()
@@ -372,6 +452,8 @@ def _format_report_long(
         sections.append("Kontekst\n" + "\n".join(context_lines))
     if diagnostics_lines:
         sections.append("Diagnostik\n" + "\n".join(diagnostics_lines))
+    if room_diagnostic_lines:
+        sections.append("Rum-diagnose\n" + "\n".join(room_diagnostic_lines[:12]))
     if room_decision_lines:
         sections.append("Rum-beslutninger\n" + "\n".join(room_decision_lines))
     if room_lines:
@@ -518,7 +600,7 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
     override_vurdering = _fix_mojibake_text(
         diagnostics.get("override_reason") or diagnostics.get("no_change_reason") or "Ingen særskilt override-begrundelse"
     )
-    samlet_vurdering = _fix_mojibake_text(
+    samlet_vurdering = _sanitize_reason_text(
         diagnostics.get("summary") or decision.get("reason") or data.get("ai_reason") or "Ingen ekstra forklaring"
     )
 
@@ -538,7 +620,7 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
         mode = _fix_mojibake_text(str(room.get("mode", "")).strip()) or "-"
         target = room.get("target_temperature")
         target_text = f"{float(target):.1f}" if isinstance(target, (int, float)) else "-"
-        reason = _fix_mojibake_text(str(room.get("reason", "")).strip())
+        reason = _sanitize_reason_text(room.get("reason", ""))
         line = f"{name} -> {mode} {target_text}"
         if reason:
             line += f" ({reason})"
@@ -549,7 +631,7 @@ def _report_fact_bundle(data: dict[str, Any]) -> dict[str, Any]:
         "run_id": run_id or "Ukendt",
         "factor": data.get("ai_factor"),
         "confidence": data.get("ai_confidence"),
-        "reason": _fix_mojibake_text(decision.get("reason") or data.get("ai_reason") or "Ingen årsag angivet"),
+        "reason": _sanitize_reason_text(decision.get("reason") or data.get("ai_reason") or "Ingen årsag angivet"),
         "mode": _fix_mojibake_text(str(global_block.get("mode") or "Ukendt")),
         "boost": bool(global_block.get("boost", False)),
         "outside_temperature": outside_temperature,
@@ -590,7 +672,7 @@ def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
                 "entity_id": str(row.get("entity_id", "")).strip(),
                 "target_temperature": row.get("target_temperature"),
                 "mode": _fix_mojibake_text(str(row.get("mode", "")).strip()),
-                "reason": _fix_mojibake_text(str(row.get("reason", "")).strip()),
+                "reason": _sanitize_reason_text(row.get("reason", "")),
             }
         )
 
@@ -598,8 +680,8 @@ def _current_decision_snapshot(data: dict[str, Any]) -> dict[str, Any]:
     source_raw = str(data.get("ai_decision_source", "")).strip()
     prev_source_display = _display_engine(data.get("ai_prev_decision_source_display"), default="Ukendt")
     prev_source_raw = str(data.get("ai_prev_decision_source", "")).strip()
-    decision_reason = _fix_mojibake_text(str(data.get("ai_reason", "")).strip())
-    prev_reason = _fix_mojibake_text(str(data.get("ai_prev_reason", "")).strip())
+    decision_reason = _sanitize_reason_text(data.get("ai_reason", ""))
+    prev_reason = _sanitize_reason_text(data.get("ai_prev_reason", ""))
     try:
         factor = float(data.get("ai_factor"))
     except (TypeError, ValueError):
@@ -690,7 +772,7 @@ def _current_decision_lines(snapshot: dict[str, Any]) -> list[str]:
             room_name = str(row.get("name", "Rum")).strip() or "Rum"
             target = row.get("target_temperature")
             mode = str(row.get("mode", "")).strip()
-            reason = str(row.get("reason", "")).strip()
+            reason = _sanitize_reason_text(row.get("reason", ""))
             target_txt = f"{target}C" if isinstance(target, (int, float)) else "-"
             mode_txt = mode or "-"
             line = f"- {room_name}: target {target_txt}, mode {mode_txt}"
@@ -783,8 +865,15 @@ class AiVarmeConfidenceSensor(AiVarmeBaseEntity, SensorEntity):
 
 
 def _room_slug(room_name: str) -> str:
-    normalized = room_name.lower()
-    normalized = normalized.replace("Ã¦", "ae").replace("Ã¸", "oe").replace("Ã¥", "aa")
+    normalized = _fix_mojibake_text(str(room_name or "")).lower()
+    normalized = (
+        normalized.replace("æ", "ae")
+        .replace("ø", "oe")
+        .replace("å", "aa")
+        .replace("Ã¦", "ae")
+        .replace("Ã¸", "oe")
+        .replace("Ã¥", "aa")
+    )
     normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
     return normalized or "rum"
 
@@ -932,6 +1021,10 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
             "varmepumpe_effekt_w": room.get("heat_pump_power_w"),
             "varmepumpe_intern_temp": room.get("heat_pump_internal_temp"),
             "varmepumpe_intern_bias_c": room.get("heat_pump_internal_bias_c"),
+            "varmepumpe_fase": room.get("heat_pump_phase"),
+            "varmepumpe_fase_årsag": room.get("heat_pump_phase_reason"),
+            "varmepumpe_fase_siden": room.get("heat_pump_phase_since"),
+            "varmepumpe_fase_indtil": room.get("heat_pump_phase_until"),
             "radiatorer": room.get("radiators", []),
         })
 
@@ -1065,7 +1158,7 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "thermostat_handover": data.get("thermostat_handover", False),
             "sidste_styringsaktivitet": data.get("last_control_activity"),
             "ai_factor": data.get("ai_factor"),
-            "ai_reason": data.get("ai_reason"),
+            "ai_reason": _sanitize_reason_text(data.get("ai_reason", "")),
             "ai_primary_engine": data.get("ai_primary_engine"),
             "ai_primary_engine_display": data.get("ai_primary_engine_display"),
             "ai_decision_source": data.get("ai_decision_source"),
@@ -1447,6 +1540,11 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
         clean_points = _filtered_report_points(data, report, bullets)
         release_info = _integration_release_info()
         facts = _report_fact_bundle(data)
+        room_diagnostics = _room_diagnostics_rows(data)
+        room_diagnostic_lines = _room_diagnostic_lines(data)
+        command_diagnostics = data.get("command_diagnostics", [])
+        if not isinstance(command_diagnostics, list):
+            command_diagnostics = []
         return _clean_text_tree({
             # Keep both legacy Danish keys and canonical short/long keys,
             # so dashboard cards can render regardless of which keyset they use.
@@ -1495,6 +1593,10 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "tørre_rum": _list_text(facts.get("dry_rooms")),
             "rum_beslutninger": facts.get("rum_beslutninger") or [],
             "rum_beslutninger_text": "\n".join(facts.get("rum_beslutninger") or []),
+            "rum_diagnostik": room_diagnostics,
+            "rum_diagnostik_linjer": room_diagnostic_lines,
+            "rum_diagnostik_text": "\n".join(room_diagnostic_lines),
+            "kommando_diagnostik": command_diagnostics,
             "sidst_opdateret": facts.get("updated_at"),
             "beslutningsmotor": data.get("ai_primary_engine_display"),
             "fallbackmotor": fallback_display,
@@ -1546,7 +1648,7 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "ai_confidence": data.get("ai_confidence"),
             "ai_prev_factor": data.get("ai_prev_factor"),
             "ai_prev_confidence": data.get("ai_prev_confidence"),
-            "ai_prev_reason": data.get("ai_prev_reason"),
+            "ai_prev_reason": _sanitize_reason_text(data.get("ai_prev_reason", "")),
             "aktiv_beslutning": decision_snapshot,
             "aktive_beslutninger_nu": decision_lines,
             "aktive_rum_beslutninger": decision_snapshot.get("room_decisions", []),

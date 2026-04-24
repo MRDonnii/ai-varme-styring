@@ -2,6 +2,31 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.23
+
+Date: 2026-04-24
+
+### Fixed
+- **Heat-pump short-cycle protection**:
+  - heat-pump commands now use phase-aware control with warmup, hold, coast, and locked-off phases
+  - stop decisions require stronger comfort confirmation before turning a pump off
+  - repeated target/mode commands are held back to reduce beeps and unnecessary cycling
+
+### Improved
+- **Room and command diagnostics**:
+  - AI report attributes now expose clearer room diagnostics and recent heat-pump command decisions
+  - dashboards can show whether a room is heating, holding, coasting, paused by openings, or blocked by comfort logic
+
+### Fixed
+- **Danish room slug handling**:
+  - room entity unique IDs now normalize real `æ`, `ø`, and `å` characters as well as mojibake variants
+  - prevents duplicate broken entities such as `ka_kken` for `Køkken`
+
+### Improved
+- **Fjernvarme readiness**:
+  - district heating price and consumption inputs are supported in the price-aware decision context
+  - setups can transition from gas to fjernvarme without changing the control model
+
 ## v0.3.22
 
 Date: 2026-04-19

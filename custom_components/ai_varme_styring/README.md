@@ -4,19 +4,40 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.22**
+**Current version: 0.3.23**
 
 ## Highlights
 
 - OpenClaw Conversation-based heating decisions with machine-readable JSON output
 - Price-aware AI decisions that can lean toward the cheapest heat source
 - Stabilized room overrides to reduce unnecessary heat-pump beeps and flip-flopping
+- Heat-pump phase control that holds comfort before stopping, instead of short cycling
+- District heating price support for fjernvarme/gas transition setups
 - Fixed AI setpoint ownership: your room target stays the main target
 - Optional Comfort Mode that adjusts internal behavior without rewriting your target
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.22
+## What is new in v0.3.23
+
+### 1. Heat pumps now use phase-based comfort control
+
+- Heat-pump rooms now expose the active phase, such as `warmup`, `hold`, `coast`, and `off_locked`.
+- Stop decisions wait for a stronger comfort signal, so the pump is less likely to turn off immediately after the room has only just started recovering.
+- Command cooldown and hold logic reduce repeated beeps, rapid target changes, and unnecessary on/off cycles.
+
+### 2. Better room diagnostics for dashboards
+
+- Room diagnostics now include clearer lines for deficit, surplus, opening pause, linked-room demand, and heat-pump phase.
+- Command diagnostics are exposed for recent heat-pump actions so dashboards can show why the controller sent or held back a command.
+- Danish room slugs now handle `æ`, `ø`, and `å` correctly, preventing duplicate entities like `ka_kken`.
+
+### 3. Fjernvarme-ready price inputs
+
+- District heating price and consumption sensors are handled alongside electricity and gas.
+- This keeps AI Varme ready for homes moving from gas to fjernvarme while preserving the same price-aware decision model.
+
+## What was new in v0.3.22
 
 ### 1. OpenClaw Conversation is now the primary path
 

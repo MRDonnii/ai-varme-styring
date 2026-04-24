@@ -168,7 +168,7 @@ Verify that the worker and forwarder scripts point to the real workspace path us
 Example path variants:
 
 - `/root/.openclaw/workspace/scripts/...`
-- `/Volumes/appdata/openclaw/config/workspace/scripts/...`
+- `/openclaw-data/config/workspace/scripts/...`
 
 Do not assume one path layout.
 If the worker runs in a different runtime root than the stored workspace, a forwarding script can silently fail even when manual tests succeed.
