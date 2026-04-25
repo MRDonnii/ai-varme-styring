@@ -2,6 +2,18 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.24
+
+Date: 2026-04-25
+
+### Fixed
+- **Garage ECO heat-pump guard**:
+  - if room-level ECO is enabled, the room has no presence, and it is already over target, the heat pump is forced OFF instead of being kept in a heat/hold phase
+  - OpenClaw room mode `eco` now activates ECO immediately for empty rooms, so Garage does not wait for the normal away timer when the AI already selected ECO
+  - when the heat pump is cheapest and the room is under the active target, local control starts the heat pump even if AI recently suggested a softer mode
+  - Qlima heat pumps are started with `set_temperature` plus `hvac_mode: heat`, fixing devices that ignore standalone `set_hvac_mode`
+  - prevents Garage from heating above target while ECO is supposed to lower the room
+
 ## v0.3.23
 
 Date: 2026-04-24

@@ -2097,6 +2097,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         actions: list[str],
         *,
         force: bool = False,
+        hvac_mode: HVACMode | str | None = None,
     ) -> None:
         """Set climate temperature only when needed."""
         if not entity_id or target is None:
@@ -2117,6 +2118,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         state = self.hass.states.get(entity_id)
         attrs = state.attributes if state else {}
+        target_hvac_mode = str(hvac_mode.value if isinstance(hvac_mode, HVACMode) else hvac_mode).lower() if hvac_mode else None
+        current_hvac_mode = str(state.state if state else "").lower()
         current = _safe_float(attrs.get("temperature"))
         current_room_temp = _safe_float(attrs.get("current_temperature"))
         recent = self._recent_temperature_commands.get(entity_id)
@@ -2169,14 +2172,22 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current_aligned = abs(current - round(current)) < 0.01
             else:
                 current_aligned = abs((current * 2.0) - round(current * 2.0)) < 0.01
-        if current is not None and current_aligned and abs(current - target_f) < compare_margin:
+        if (
+            current is not None
+            and current_aligned
+            and abs(current - target_f) < compare_margin
+            and (not target_hvac_mode or current_hvac_mode == target_hvac_mode)
+        ):
             self._cycle_temperature_commands[entity_id] = target_f
             self._record_command_diagnostic(entity_id, "temperature", "no_change", f"{target_f:.1f}C")
             return
+        service_data = {"entity_id": entity_id, "temperature": target_f}
+        if target_hvac_mode:
+            service_data["hvac_mode"] = target_hvac_mode
         await self.hass.services.async_call(
             "climate",
             "set_temperature",
-            {"entity_id": entity_id, "temperature": target_f},
+            service_data,
             blocking=True,
         )
         self._cycle_temperature_commands[entity_id] = target_f
@@ -2190,6 +2201,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entity_id: str | None,
         mode: HVACMode | str | None,
         actions: list[str],
+        *,
+        force: bool = False,
     ) -> None:
         """Set climate HVAC mode only when it changed."""
         if not entity_id or mode is None:
@@ -2207,6 +2220,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         recent_retry_cooldown_s = 8.0 * 60.0 if is_known_heat_pump else 90.0
         if (
+            not force
+            and
             recent
             and recent[0] == target_mode
             and (now_ts - float(recent[1])) < recent_retry_cooldown_s
@@ -4076,8 +4091,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             decimals,
                         )
                         eco_due = bool(
-                            not room_occupied_now
-                            and _minutes_since(rt.get("room_empty_since"), now_ts) >= room.presence_away_min
+                            (
+                                not room_occupied_now
+                                and _minutes_since(rt.get("room_empty_since"), now_ts) >= room.presence_away_min
+                            )
+                            or (
+                                str(rt.get("openclaw_mode_override", "")).strip().lower() == "eco"
+                                and not room_occupied_now
+                            )
                         )
                         eco_return_due = bool(
                             rt.get("eco_active", False)
@@ -4295,7 +4316,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             hp_boost = 1.0 if hp_need < 0.5 else 1.5
                             hp_target = round(max(16.0, min(30.0, room.target + hp_boost)), decimals)
                             await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
-                            await self._async_set_temperature_if_needed(room.heat_pump, hp_target, actions)
+                            await self._async_set_temperature_if_needed(
+                                room.heat_pump,
+                                hp_target,
+                                actions,
+                                force=True,
+                            )
                             self._set_heat_pump_phase(
                                 rt,
                                 "fallback_heat",
@@ -4464,7 +4490,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 enabled
                                 and not rt.get("eco_active", False)
                                 and not room_occupied_now
-                                and _minutes_since(rt.get("room_empty_since"), now_ts) >= room.presence_away_min
+                                and (
+                                    _minutes_since(rt.get("room_empty_since"), now_ts) >= room.presence_away_min
+                                    or str(rt.get("openclaw_mode_override", "")).strip().lower() == "eco"
+                                )
                             ):
                                 rt["eco_active"] = True
                                 rt["eco_last_change"] = now_ts
@@ -4553,7 +4582,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         max(16.0, min(30.0, room.target - 2.0)),
                                         decimals,
                                     )
-                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                    await self._async_set_hvac_mode_if_needed(
+                                        room.heat_pump,
+                                        HVACMode.HEAT,
+                                        actions,
+                                        force=True,
+                                    )
                                     await self._async_set_temperature_if_needed(
                                         room.heat_pump,
                                         open_coast_target,
@@ -4658,6 +4692,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         eco_setpoint,
                                         actions,
                                         force=True,
+                                        hvac_mode=HVACMode.HEAT,
                                     )
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
                                     rt["overheat_off_until"] = now_ts + (
@@ -4671,9 +4706,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         until_ts=_safe_float(rt.get("overheat_off_until")),
                                     )
                                     actions.append(f"{room.name}: eco over mål -> varmepumpe OFF")
-                                elif room.temperature <= (room.eco_target - 0.3):
+                                elif room.temperature < (room.eco_target - 0.05):
                                     rt["overheat_off_until"] = None
-                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                    await self._async_set_hvac_mode_if_needed(
+                                        room.heat_pump,
+                                        HVACMode.HEAT,
+                                        actions,
+                                        force=True,
+                                    )
                                     await self._async_set_temperature_if_needed(
                                         room.heat_pump,
                                         eco_setpoint,
@@ -4710,6 +4750,32 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 actions.append(
                                     f"{room.name}: eco HP billigst -> radiatorer holdes lavere ({eco_radiator_target}C)"
                                 )
+                            continue
+
+                        if (
+                            room.heat_pump
+                            and room.presence_eco_enabled
+                            and not room_occupied_now
+                            and not vacuum_running
+                            and room.surplus >= max(0.3, min(0.5, room.stop_surplus_c))
+                        ):
+                            hp_state = self.hass.states.get(room.heat_pump)
+                            if hp_state and hp_state.state not in ("off", "unknown", "unavailable"):
+                                await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                                rt["last_switch"] = now_ts
+                            rt["heat_hold_until"] = None
+                            rt["stop_candidate_since"] = None
+                            rt["overheat_off_until"] = now_ts + (
+                                max(15.0, room.anti_short_cycle_min * 5.0) * 60.0
+                            )
+                            self._set_heat_pump_phase(
+                                rt,
+                                "idle_no_presence_off",
+                                "ingen presence og rum over mål",
+                                now_ts,
+                                until_ts=_safe_float(rt.get("overheat_off_until")),
+                            )
+                            actions.append(f"{room.name}: ingen presence + over mål -> varmepumpe OFF")
                             continue
             
                         served_rooms = _heat_pump_served_rooms(room)
@@ -5023,13 +5089,32 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             and hp_control_surplus <= overheat_preheat_margin_c
                         )
             
-                        allow_start = (
-                            effective_deficit >= effective_start_threshold
-                            and allow_heat_pumps
-                            and not massive_overheat_active
+                        immediate_under_target = bool(room.heat_pump and room.deficit > 0.0)
+                        direct_under_target_start = bool(
+                            room.heat_pump
+                            and room.deficit >= 0.08
+                            and not room.opening_active
+                        )
+                        allow_start = bool(
+                            (
+                                (effective_deficit >= effective_start_threshold or immediate_under_target)
+                                and allow_heat_pumps
+                                and not massive_overheat_active
+                            )
+                            or (
+                                direct_under_target_start
+                                and not massive_overheat_active
+                            )
                         )
                         openclaw_mode_override = str(rt.get("openclaw_mode_override", "")).strip().lower()
                         force_off_by_ai = openclaw_mode_override == "off"
+                        heat_pump_cheapest_under_target = bool(
+                            room.heat_pump
+                            and allow_heat_pumps
+                            and room.deficit >= 0.05
+                            and not room.opening_active
+                            and not massive_overheat_active
+                        )
                         room_hybrid_takeover_heat = bool(
                             thermostat_handover
                             and room.heat_pump
@@ -5057,6 +5142,26 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                         if force_off_by_ai:
                             allow_start = False
+                        if heat_pump_cheapest_under_target:
+                            allow_start = True
+                            force_off_by_ai = False
+                            if overheat_off_locked:
+                                rt["overheat_off_until"] = None
+                                overheat_off_locked = False
+                                actions.append(
+                                    f"{room.name}: under mål og varmepumpe billigst -> frigiver varme-start"
+                                )
+                        idle_no_presence_over_target = bool(
+                            room.heat_pump
+                            and room.presence_eco_enabled
+                            and not room_occupied_now
+                            and not vacuum_running
+                            and room.surplus >= max(0.3, min(0.5, room.stop_surplus_c))
+                            and not shared_demand_active_for_hp
+                            and not room_hybrid_takeover_heat
+                        )
+                        if idle_no_presence_over_target:
+                            allow_start = False
                         if overheat_off_locked and not overheat_preheat_ready:
                             allow_start = False
                             self._set_heat_pump_phase(
@@ -5072,17 +5177,61 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 "blocked_overheat_lock",
                                 f"surplus {hp_control_surplus:.2f}C",
                             )
+                        hp_current_target = _safe_float(
+                            (hp_state.attributes if hp_state else {}).get("temperature")
+                        )
+                        stuck_under_target = bool(
+                            room.heat_pump
+                            and not allow_start
+                            and room.deficit >= 0.08
+                            and not room.opening_active
+                            and not massive_overheat_active
+                            and not force_off_by_ai
+                            and not overheat_off_locked
+                            and hp_current_target is not None
+                            and hp_current_target <= (room.target + 0.05)
+                        )
+                        if stuck_under_target:
+                            allow_start = True
+                            actions.append(
+                                f"{room.name}: under mål med lavt HP-setpunkt -> tvinger varme-start"
+                            )
                         if low_confidence:
                             # Fail soft: keep deterministic heating control active.
                             # We only reduce AI aggressiveness, never block basic heat demand.
                             hp_room_offset = max(hp_room_offset, 0.0)
                         last_switch = rt.get("last_switch")
                         if allow_start:
-                            if _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min and effective_deficit < quick_start_threshold:
+                            if (
+                                _minutes_since(last_switch, now_ts) < room.anti_short_cycle_min
+                                and effective_deficit < quick_start_threshold
+                                and not direct_under_target_start
+                                and not heat_pump_cheapest_under_target
+                            ):
                                 allow_start = False
             
                         if room.heat_pump:
-                            if force_off_by_ai:
+                            if idle_no_presence_over_target:
+                                hp_was_running = bool(
+                                    hp_state and hp_state.state not in ("off", "unknown", "unavailable")
+                                )
+                                if hp_was_running:
+                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
+                                    rt["last_switch"] = now_ts
+                                rt["heat_hold_until"] = None
+                                rt["stop_candidate_since"] = None
+                                rt["overheat_off_until"] = now_ts + (
+                                    max(15.0, room.anti_short_cycle_min * 5.0) * 60.0
+                                )
+                                self._set_heat_pump_phase(
+                                    rt,
+                                    "idle_no_presence_off",
+                                    "ingen presence og rum over mål",
+                                    now_ts,
+                                    until_ts=_safe_float(rt.get("overheat_off_until")),
+                                )
+                                actions.append(f"{room.name}: ingen presence + over mål -> varmepumpe OFF")
+                            elif force_off_by_ai:
                                 hp_was_running = bool(hp_state and hp_state.state != "off")
                                 await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
                                 rt["heat_hold_until"] = None
@@ -5099,9 +5248,20 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 rt["stop_candidate_since"] = None
                                 hp_prev_state = str(hp_state.state).lower() if hp_state and hp_state.state is not None else "unknown"
                                 hp_was_not_heat = hp_prev_state != "heat"
+                                if room.deficit > 0.0:
+                                    # Keep heat pumps actively calling for heat when room is below target.
+                                    hp_target = round(
+                                        max(16.0, min(30.0, max(hp_target, room.target + 1.0))),
+                                        decimals,
+                                    )
                                 if pid_enabled:
                                     hp_target = round(
                                         max(16.0, min(30.0, room.target + hp_room_offset + pid_output)),
+                                        decimals,
+                                    )
+                                if room.deficit > 0.0:
+                                    hp_target = round(
+                                        max(16.0, min(30.0, max(hp_target, room.target + 1.0))),
                                         decimals,
                                     )
                                 hp_power_w = room.heat_pump_power_w
@@ -5116,8 +5276,19 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         actions.append(
                                             f"{room.name}: meget lavt HP-forbrug ({round(hp_power_w)}W) -> mild setpoint boost"
                                         )
-                                await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
-                                await self._async_set_temperature_if_needed(room.heat_pump, hp_target, actions)
+                                await self._async_set_hvac_mode_if_needed(
+                                    room.heat_pump,
+                                    HVACMode.HEAT,
+                                    actions,
+                                    force=heat_pump_cheapest_under_target,
+                                )
+                                await self._async_set_temperature_if_needed(
+                                    room.heat_pump,
+                                    hp_target,
+                                    actions,
+                                    force=True,
+                                    hvac_mode=HVACMode.HEAT if heat_pump_cheapest_under_target else None,
+                                )
                                 await self._async_set_fan_mode_if_needed(room.heat_pump, hp_fan_preferred, actions)
                                 if hp_was_not_heat:
                                     rt["last_switch"] = now_ts
