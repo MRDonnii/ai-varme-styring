@@ -53,11 +53,11 @@ OPENCLAW_RESULTS_FILE = Path(
         str(OPENCLAW_RUNTIME_TMP_DIR / "openclaw_completion_results.json"),
     )
 )
-OPENCLAW_RESULTS_FILE_HOST = Path("/haconfig/custom_components/ai_varme_styring/runtime/tmp/openclaw_completion_results.json")
-OPENCLAW_QUEUE_DIR_HOST = Path("/haconfig/custom_components/ai_varme_styring/runtime/tmp/openclaw_decision_queue")
+OPENCLAW_RESULTS_FILE_HOST = Path("/config/custom_components/ai_varme_styring/runtime/tmp/openclaw_completion_results.json")
+OPENCLAW_QUEUE_DIR_HOST = Path("/config/custom_components/ai_varme_styring/runtime/tmp/openclaw_decision_queue")
 OPENCLAW_RESULTS_FILE_LEGACY = Path("/config/_tmp_openclaw_completion_results.json")
 OPENCLAW_QUEUE_DIR_LEGACY = Path("/config/_tmp_openclaw_decision_queue")
-OPENCLAW_QUEUE_DIR_HOST_LEGACY = Path("/haconfig/_tmp_openclaw_decision_queue")
+OPENCLAW_QUEUE_DIR_HOST_LEGACY = Path("/config/_tmp_openclaw_decision_queue")
 OPENCLAW_QUEUE_ENABLED = os.environ.get("OPENCLAW_QUEUE_ENABLED", "").strip().lower() in {
     "1",
     "true",

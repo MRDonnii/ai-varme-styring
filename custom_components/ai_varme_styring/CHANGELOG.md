@@ -2,6 +2,15 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.26
+
+Date: 2026-04-25
+
+### Fixed
+- **Public package cleanup**:
+  - OpenClaw runtime fallback paths now use generic Home Assistant `/config` paths instead of host-specific path names
+  - release scope was rescanned for private paths, hostnames, LAN IPs, room names, and token patterns
+
 ## v0.3.25
 
 Date: 2026-04-25

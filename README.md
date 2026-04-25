@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.25**
+**Current version: 0.3.26**
 
 ## Highlights
 
@@ -18,7 +18,14 @@ Local Home Assistant integration for AI-based heating control with OpenClaw Conv
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.25
+## What is new in v0.3.26
+
+### Public package cleanup
+
+- Runtime fallback paths now use generic Home Assistant `/config` defaults instead of installation-specific host paths.
+- Release scope was rescanned for private paths, hostnames, LAN IPs, room names, and token patterns.
+
+## What was new in v0.3.25
 
 ### Generic ECO and heat-pump guard
 
