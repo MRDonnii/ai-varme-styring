@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.24**
+**Current version: 0.3.25**
 
 ## Highlights
 
@@ -18,15 +18,24 @@ Local Home Assistant integration for AI-based heating control with OpenClaw Conv
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.24
+## What is new in v0.3.25
 
-### Garage ECO guard
+### Generic ECO and heat-pump guard
 
 - Rooms with room-level ECO enabled now stop the heat pump when there is no presence and the room is already over target.
 - OpenClaw `eco` room directives now activate ECO immediately for empty rooms instead of waiting for the normal away timer.
 - When the heat pump is cheapest and the room is under the active target, it starts even if AI recently suggested a softer mode.
 - Qlima heat pumps are started with `set_temperature` plus `hvac_mode: heat`, because some devices ignore a standalone mode call.
-- This prevents Garage from staying in heat mode above target while waiting for ECO to settle.
+- Heat-pump rooms use responsive default start thresholds generically, independent of room name.
+
+## What was new in v0.3.24
+
+### Generic ECO and heat-pump guard
+
+- Rooms with room-level ECO enabled stop the heat pump when there is no presence and the room is already over target.
+- OpenClaw `eco` room directives activate ECO immediately for empty rooms instead of waiting for the normal away timer.
+- When the heat pump is cheapest and the room is under the active target, it starts even if AI recently suggested a softer mode.
+- Qlima heat pumps are started with `set_temperature` plus `hvac_mode: heat`, because some devices ignore a standalone mode call.
 
 ## What was new in v0.3.23
 

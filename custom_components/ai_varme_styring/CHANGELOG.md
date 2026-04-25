@@ -2,17 +2,27 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.25
+
+Date: 2026-04-25
+
+### Fixed
+- **Generic ECO and heat-pump control**:
+  - room-level ECO heat-pump guards now apply to any configured room, not to a room name
+  - heat-pump rooms use responsive default start thresholds independent of the room name
+  - public release notes no longer describe the fix as a site-specific room correction
+
 ## v0.3.24
 
 Date: 2026-04-25
 
 ### Fixed
-- **Garage ECO heat-pump guard**:
+- **Generic ECO heat-pump guard**:
   - if room-level ECO is enabled, the room has no presence, and it is already over target, the heat pump is forced OFF instead of being kept in a heat/hold phase
-  - OpenClaw room mode `eco` now activates ECO immediately for empty rooms, so Garage does not wait for the normal away timer when the AI already selected ECO
+  - OpenClaw room mode `eco` now activates ECO immediately for empty rooms, so the room does not wait for the normal away timer when the AI already selected ECO
   - when the heat pump is cheapest and the room is under the active target, local control starts the heat pump even if AI recently suggested a softer mode
   - Qlima heat pumps are started with `set_temperature` plus `hvac_mode: heat`, fixing devices that ignore standalone `set_hvac_mode`
-  - prevents Garage from heating above target while ECO is supposed to lower the room
+  - prevents heat-pump rooms from heating above target while ECO is supposed to lower the room
 
 ## v0.3.23
 
@@ -259,10 +269,10 @@ Date: 2026-04-05
 Date: 2026-04-05
 
 ### Fixed
-- **Garage heat-start responsiveness**:
-  - garage rooms now use lower default heat-pump start thresholds so small deficits like 21.8 -> 22.0 are no longer ignored
-  - existing installations that still carry the old default `0.4` garage thresholds are migrated at runtime to the new garage-specific defaults
-  - the room editor now also shows the lower garage defaults for new or edited garage rooms
+- **Heat-pump room start responsiveness**:
+  - heat-pump rooms now use lower default start thresholds so small deficits like 21.8 -> 22.0 are no longer ignored
+  - existing heat-pump rooms that still carry the old default `0.4` thresholds are migrated at runtime to the new heat-pump defaults
+  - the room editor now also shows the lower defaults for new or edited heat-pump rooms
 
 ## v0.3.8
 
