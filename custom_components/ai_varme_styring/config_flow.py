@@ -122,8 +122,8 @@ from .const import (
     DEFAULT_ENABLE_PRESENCE_ECO,
     DEFAULT_ENABLE_PRICE_AWARENESS,
     DEFAULT_FLOW_LIMIT_MARGIN_C,
-    DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C,
-    DEFAULT_GARAGE_ROOM_START_DEFICIT_C,
+    DEFAULT_HEAT_PUMP_ROOM_QUICK_START_DEFICIT_C,
+    DEFAULT_HEAT_PUMP_ROOM_START_DEFICIT_C,
     DEFAULT_GEMINI_MODEL_FAST,
     DEFAULT_GEMINI_MODEL_REPORT,
     DEFAULT_HUMIDITY_COMFORT_ENABLED,
@@ -984,15 +984,14 @@ def _room_schema(
     defaults: dict[str, Any] | None = None, *, include_add_another: bool = True, room_name_options: list[str] | None = None, room_group_options: list[str] | None = None
 ) -> vol.Schema:
     defaults = defaults or {}
-    room_name = str(defaults.get(CONF_ROOM_NAME, "") or "").strip().lower()
-    is_garage_room = "garage" in room_name or "garagen" in room_name
+    has_heat_pump = bool(str(defaults.get(CONF_ROOM_HEAT_PUMP, "") or "").strip())
     default_room_quick_start = defaults.get(
         CONF_ROOM_QUICK_START_DEFICIT_C,
-        DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C if is_garage_room else DEFAULT_ROOM_QUICK_START_DEFICIT_C,
+        DEFAULT_HEAT_PUMP_ROOM_QUICK_START_DEFICIT_C if has_heat_pump else DEFAULT_ROOM_QUICK_START_DEFICIT_C,
     )
     default_room_start = defaults.get(
         CONF_ROOM_START_DEFICIT_C,
-        DEFAULT_GARAGE_ROOM_START_DEFICIT_C if is_garage_room else DEFAULT_ROOM_START_DEFICIT_C,
+        DEFAULT_HEAT_PUMP_ROOM_START_DEFICIT_C if has_heat_pump else DEFAULT_ROOM_START_DEFICIT_C,
     )
     schema: dict[Any, Any] = {
             vol.Required(CONF_ROOM_NAME, default=defaults.get(CONF_ROOM_NAME, "")): str,

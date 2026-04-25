@@ -130,8 +130,8 @@ from .const import (
     DEFAULT_DECIMALS,
     DEFAULT_ENABLE_LEARNING,
     DEFAULT_FLOW_LIMIT_MARGIN_C,
-    DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C,
-    DEFAULT_GARAGE_ROOM_START_DEFICIT_C,
+    DEFAULT_HEAT_PUMP_ROOM_QUICK_START_DEFICIT_C,
+    DEFAULT_HEAT_PUMP_ROOM_START_DEFICIT_C,
     DEFAULT_HUMIDITY_COMFORT_ENABLED,
     DEFAULT_HUMIDITY_DRY_THRESHOLD,
     DEFAULT_HUMIDITY_HUMID_THRESHOLD,
@@ -249,43 +249,7 @@ def _is_localhost_http_url(value: str, port: int) -> bool:
     candidate = str(value or "").strip().lower()
     return f"127.0.0.1:{port}" in candidate or f"localhost:{port}" in candidate
 _STORE_VERSION = 1
-_LEGACY_AUTOMATION_IDS = {
-    "varmepumpe_prioritet_kontinuerlig_vurdering",
-    "varmepumpe_prioritet_stue_massiv_overvarme_sluk",
-    "varmepumpe_prioritet_kokken_massiv_overvarme_sluk",
-    "varmepumpe_prioritet_garage_massiv_overvarme_sluk",
-    "garage_varmepumpe_prioritet_setpoint_stabil",
-    "varmepumpe_ollama_generate_report",
-    "varmepumpe_ollama_manual_trigger",
-    "varmepumpe_ai_setpoint_change_trigger_run",
-    "varmepumpe_ollama_daily_report",
-    "varmepumpe_ollama_sync_helpers",
-    "varmepumpe_ollama_sync_live_tuning_json",
-    "varmepumpe_ollama_auto_tuning_apply",
-    "varmepumpe_ai_varme_sync_prioritet_to_ollama",
-    "varmepumpe_ai_varme_sync_ollama_to_prioritet",
-    "varmepumpe_ollama_health_check",
-    "varmepumpe_sensor_validation",
-    "varmepumpe_prioritet_evaluering_watchdog",
-    "varmepumpe_ollama_handler_styre_temp",
-    "varmepumpe_ollama_confidence_extraction",
-    "varmepumpe_ollama_learning_feedback_loop",
-    "varmepumpe_ollama_handler_revert_logic",
-    "varmepumpe_ai_setpoint_snapshot_init",
-    "varmepumpe_ai_setpoint_snapshot_update_from_user",
-    "varmepumpe_ai_setpoint_restore_authoritative",
-    "garage_ai_presence_eco_enter",
-    "garage_ai_presence_eco_exit_on_presence",
-    "garage_ai_presence_eco_exit_when_ai_off",
-    "garage_ai_presence_eco_hard_floor_guard",
-    "garage_ai_presence_eco_user_override_release",
-    "garage_ai_presence_eco_heat_failsafe",
-    "garage_radiator_sync_under_ai_priority",
-    "varmepumpe_pid_layer_garage_update",
-    "varmepumpe_pid_layer_garage_reset",
-    "varmepumpe_ai_handler_watchdog",
-    "varmepumpe_ollama_analysis_15min",
-}
+_LEGACY_AUTOMATION_IDS: set[str] = set()
 
 
 def _safe_float(value: Any) -> float | None:
@@ -936,10 +900,7 @@ def _normalize_ai_input_number_target(value: float | None) -> float | None:
 def _resolve_room_temp_sensor_entity(
     hass: HomeAssistant, room_name: str, configured_entity: str | None
 ) -> str | None:
-    """Resolve temperature sensor with safe preference rules.
-
-    For Garage we prefer the base sensor without trailing `_2` when both exist.
-    """
+    """Resolve temperature sensor with safe preference rules."""
 
     def _state_ok(entity_id: str | None) -> bool:
         if not entity_id:
@@ -960,11 +921,6 @@ def _resolve_room_temp_sensor_entity(
     candidates: list[str] = []
     configured = str(configured_entity or "").strip()
     if configured:
-        room_l = room_name.lower()
-        if "garage" in room_l and configured.endswith("_2"):
-            base = configured[:-2]
-            # user-preferred garage sensor should win if available
-            candidates.append(base)
         candidates.append(configured)
 
     for slug in sorted(slug_variants):
@@ -3268,27 +3224,25 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ", ".join(active_heat_names) if active_heat_names else "Ingen aktiv varmekilde"
                 )
             
-                room_name_l = str(name or "").strip().lower()
-                garage_room = "garage" in room_name_l or "garagen" in room_name_l
                 configured_quick_start = room_cfg.get(CONF_ROOM_QUICK_START_DEFICIT_C)
-                if garage_room and configured_quick_start is not None and float(configured_quick_start) == DEFAULT_ROOM_QUICK_START_DEFICIT_C:
-                    quick_start_deficit_c = DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C
+                if heat_pump_entity and configured_quick_start is not None and float(configured_quick_start) == DEFAULT_ROOM_QUICK_START_DEFICIT_C:
+                    quick_start_deficit_c = DEFAULT_HEAT_PUMP_ROOM_QUICK_START_DEFICIT_C
                 else:
                     quick_start_deficit_c = float(
                         configured_quick_start
                         if configured_quick_start is not None
-                        else (DEFAULT_GARAGE_ROOM_QUICK_START_DEFICIT_C if garage_room else DEFAULT_ROOM_QUICK_START_DEFICIT_C)
+                        else (DEFAULT_HEAT_PUMP_ROOM_QUICK_START_DEFICIT_C if heat_pump_entity else DEFAULT_ROOM_QUICK_START_DEFICIT_C)
                     )
 
                 configured_start_deficit = room_cfg.get(CONF_ROOM_START_DEFICIT_C)
                 base_start_deficit = cfg.get(CONF_START_DEFICIT_C, DEFAULT_ROOM_START_DEFICIT_C)
-                if garage_room and configured_start_deficit is not None and float(configured_start_deficit) == DEFAULT_ROOM_START_DEFICIT_C:
-                    start_deficit_c = DEFAULT_GARAGE_ROOM_START_DEFICIT_C
+                if heat_pump_entity and configured_start_deficit is not None and float(configured_start_deficit) == DEFAULT_ROOM_START_DEFICIT_C:
+                    start_deficit_c = DEFAULT_HEAT_PUMP_ROOM_START_DEFICIT_C
                 else:
                     start_deficit_c = float(
                         configured_start_deficit
                         if configured_start_deficit is not None
-                        else (DEFAULT_GARAGE_ROOM_START_DEFICIT_C if garage_room else base_start_deficit)
+                        else (DEFAULT_HEAT_PUMP_ROOM_START_DEFICIT_C if heat_pump_entity else base_start_deficit)
                     )
 
                 adjacent_rooms_cfg = room_cfg.get(CONF_ROOM_ADJACENT_ROOMS, [])
