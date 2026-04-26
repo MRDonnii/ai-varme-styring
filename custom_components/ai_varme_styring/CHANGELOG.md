@@ -2,6 +2,27 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.27
+
+Date: 2026-04-26
+
+### Fixed
+- **Heat-pump start protection**:
+  - heat pumps no longer wake only because electricity is cheap when their own room is already above target
+  - linked-room demand can still request heat, but only when the heat-pump room is not already clearly warm
+  - start diagnostics now explain whether a heat pump was allowed or blocked, including warm-room blocks
+
+### Improved
+- **Measured-first heat economy**:
+  - added a dedicated economy model for heat pump, gas, and district heat price comparison
+  - AI report sensors now expose strategy, confidence, validation warnings, strategy warnings, gas m3, heat-pump kWh, and validated savings
+  - validated savings are only published when both measurement validation and strategy state are clean
+  - fjernvarme can be compared alongside gas without removing gas support
+
+### Fixed
+- **Danish text cleanup**:
+  - repaired mojibake in sensor strings so Danish text with `æ`, `ø`, `å`, and `°` renders correctly
+
 ## v0.3.26
 
 Date: 2026-04-25

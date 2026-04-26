@@ -25,6 +25,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .ai_client import AiProviderClient
+from .economy import build_heat_economy
 from .const import (
     AI_PRIMARY_ENGINE_OPENCLAW,
     AI_PRIMARY_ENGINE_PROVIDER,
@@ -2671,6 +2672,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "heat_pump_phase_reason": room_rt.get("hp_phase_reason"),
                     "heat_pump_phase_since": _fmt_ts(room_rt.get("hp_phase_since")),
                     "heat_pump_phase_until": _fmt_ts(room_rt.get("hp_phase_until")),
+                    "heat_pump_start_allowed": room_rt.get("hp_start_allowed"),
+                    "heat_pump_start_reason": room_rt.get("hp_start_reason"),
+                    "heat_pump_start_block_reason": room_rt.get("hp_start_block_reason"),
+                    "heat_pump_start_evaluated_at": _fmt_ts(room_rt.get("hp_start_evaluated_at")),
                 }
             )
 
@@ -3516,37 +3521,119 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self.hass.states.get("sensor.varmepris_gasfyr")
                 else None
             )
+
+            def _first_numeric_state(*entity_ids: str) -> float | None:
+                for entity_id in entity_ids:
+                    st = self.hass.states.get(entity_id)
+                    value = _safe_float(st.state if st else None)
+                    if value is not None:
+                        return value
+                return None
+
+            heat_pump_daily_el_kwh = _first_numeric_state(
+                "sensor.varmepumper_samlet_daglig_forbrug",
+                "sensor.daily_varmepumpe_energy_usage",
+                "sensor.daily_varmepumpe_energy_usage_2",
+            )
+            if heat_pump_daily_el_kwh is None:
+                hp_daily_parts = [
+                    _first_numeric_state(
+                        "sensor.varmepumpe_stue_daglig_forbrug",
+                        "sensor.dagligt_varmepumpe_stuen_energy_usage",
+                    ),
+                    _first_numeric_state(
+                        "sensor.varmepumpe_kokken_varmepumpe_ka_kken_daglig_forbrug",
+                        "sensor.varmepumpe_kokken_daglig_forbrug",
+                    ),
+                    _first_numeric_state("sensor.varmepumpe_garage_daglig_forbrug"),
+                ]
+                valid_hp_parts = [v for v in hp_daily_parts if v is not None]
+                if valid_hp_parts:
+                    heat_pump_daily_el_kwh = sum(valid_hp_parts)
+
+            gas_consumption_m3 = _safe_float(gas_consumption)
+            if gas_consumption_m3 is None:
+                gas_consumption_m3 = _first_numeric_state(
+                    "sensor.weishaupt_dagligt_forbrug",
+                    "sensor.weishaupt_m3",
+                    "sensor.daily_gas_consumption",
+                    "sensor.daglig_gas_forbrug_m3_2",
+                )
+            gas_price_m3 = _first_numeric_state(
+                "sensor.total_gas_pris_m3",
+                "sensor.gasprisguiden_norlys_gaspris_inkl_alt",
+            )
+            gas_total_heat_kwh = _first_numeric_state(
+                "sensor.wtc_g_daily_heat_energy_emitted_total_we0",
+            )
+            gas_space_heat_kwh = _first_numeric_state(
+                "sensor.wtc_g_daily_heat_energy_emitted_heat_mode_we0",
+            )
+            gas_dhw_kwh = _first_numeric_state(
+                "sensor.wtc_g_daily_heat_energy_emitted_dhw_mode_we0",
+            )
             # Fallback for setups without legacy templates.
             assumed_hp_cop = 3.0
             fallback_hp_price = None
             if el_price is not None:
                 fallback_hp_price = el_price / max(1.0, assumed_hp_cop)
-            effective_hp_price = legacy_hp_price if legacy_hp_price is not None else fallback_hp_price
+            economy_rooms = [
+                {
+                    "name": r.name,
+                    "deficit": r.deficit,
+                    "surplus": r.surplus,
+                    "heat_pump": r.heat_pump,
+                    "radiators": r.radiators,
+                }
+                for r in rooms
+            ]
+            heat_economy = build_heat_economy(
+                rooms=economy_rooms,
+                el_price_dkk_per_kwh=el_price,
+                heat_pump_price_dkk_per_heat_kwh=legacy_hp_price or fallback_hp_price,
+                heat_pump_el_kwh=heat_pump_daily_el_kwh,
+                gas_price_dkk_per_m3=gas_price_m3,
+                gas_price_dkk_per_heat_kwh=legacy_gas_heat_price,
+                gas_price_dkk_per_kwh_input=gas_price,
+                gas_m3=gas_consumption_m3,
+                gas_emitted_total_kwh=gas_total_heat_kwh,
+                gas_emitted_space_heat_kwh=gas_space_heat_kwh,
+                gas_emitted_dhw_kwh=gas_dhw_kwh,
+                district_price_dkk_per_kwh=district_heat_price,
+                district_heat_kwh=district_heat_consumption,
+                price_margin=price_margin,
+            )
+            price_rows = heat_economy.get("prices", {})
+            effective_hp_price = _safe_float(
+                (price_rows.get("heat_pump") or {}).get("price_dkk_per_heat_kwh")
+            )
+            gas_compare_price = _safe_float(
+                (price_rows.get("gas") or {}).get("price_dkk_per_heat_kwh")
+            )
             cheapest_alt_price = None
             cheapest_alt_name = None
-            gas_compare_price = legacy_gas_heat_price if legacy_gas_heat_price is not None else gas_price
-            for name, price in (("Gas", gas_compare_price), ("Fjernvarme", district_heat_price)):
+            for source, label in (("gas", "Gas"), ("district_heat", "Fjernvarme")):
+                row = price_rows.get(source) or {}
+                price = _safe_float(row.get("price_dkk_per_heat_kwh")) if row.get("valid") else None
                 if price is None:
                     continue
                 if cheapest_alt_price is None or price < cheapest_alt_price:
                     cheapest_alt_price = price
-                    cheapest_alt_name = name
+                    cheapest_alt_name = label
             heat_pump_cheaper = (
-                effective_hp_price is not None
-                and cheapest_alt_price is not None
-                and (cheapest_alt_price - effective_hp_price) >= price_margin
+                heat_economy.get("cheapest_source") == "heat_pump"
+                and effective_hp_price is not None
             )
-            estimated_savings_per_kwh = None
-            if effective_hp_price is not None and cheapest_alt_price is not None:
-                estimated_savings_per_kwh = round(max(cheapest_alt_price - effective_hp_price, 0.0), decimals)
-            estimated_daily_savings = None
-            savings_consumption_base = None
-            if district_heat_consumption is not None:
-                savings_consumption_base = district_heat_consumption
-            elif gas_consumption is not None:
-                savings_consumption_base = gas_consumption
-            if estimated_savings_per_kwh is not None and savings_consumption_base is not None:
-                estimated_daily_savings = round(estimated_savings_per_kwh * savings_consumption_base, decimals)
+            estimated_savings_per_kwh = _safe_float(heat_economy.get("estimated_savings_dkk_per_kwh"))
+            estimated_daily_savings = _safe_float(heat_economy.get("validated_savings_dkk"))
+            if estimated_daily_savings is None and estimated_savings_per_kwh is not None:
+                hp_heat_kwh = _safe_float((heat_economy.get("consumption") or {}).get("heat_pump_heat_kwh"))
+                if (
+                    hp_heat_kwh is not None
+                    and not heat_economy.get("validation_warnings")
+                    and not heat_economy.get("strategy_warnings")
+                ):
+                    estimated_daily_savings = round(estimated_savings_per_kwh * hp_heat_kwh, decimals)
             estimated_monthly_savings = None
             if estimated_daily_savings is not None:
                 estimated_monthly_savings = round(estimated_daily_savings * 30.0, decimals)
@@ -4802,10 +4889,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             effective_deficit = max([room.deficit] + [r.deficit for r in shared_demand_rooms])
                             shared_deficit_max = max(float(r.deficit) for r in shared_demand_rooms)
                             # Let linked-room demand wake a heat pump room even when the
-                            # heat pump room itself is slightly above target.
+                            # heat pump room itself is very close to target. Do not wake
+                            # an already warm heat-pump room for linked demand.
                             shared_demand_active_for_hp = bool(
                                 room.heat_pump
                                 and shared_deficit_max >= 0.08
+                                and room.surplus < max(0.2, min(0.4, room.stop_surplus_c))
                                 and hp_control_surplus < overheat_release_surplus_c
                             )
                         comfort_effective_gap = max(float(room.deficit), float(room.comfort_gap))
@@ -5105,6 +5194,12 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 actions.append(
                                     f"{room.name}: under mål og varmepumpe billigst -> frigiver varme-start"
                                 )
+                        warm_room_start_block = bool(
+                            room.heat_pump
+                            and room.surplus >= max(0.3, min(0.5, room.stop_surplus_c))
+                            and not heat_pump_cheapest_under_target
+                            and not room_hybrid_takeover_heat
+                        )
                         idle_no_presence_over_target = bool(
                             room.heat_pump
                             and room.presence_eco_enabled
@@ -5116,6 +5211,21 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         if idle_no_presence_over_target:
                             allow_start = False
+                        elif warm_room_start_block:
+                            allow_start = False
+                            rt["heat_hold_until"] = None
+                            self._set_heat_pump_phase(
+                                rt,
+                                "start_blocked_warm_room",
+                                f"rum over mål ({room.surplus:.2f}C), ingen start uden underskud",
+                                now_ts,
+                            )
+                            self._record_command_diagnostic(
+                                room.heat_pump,
+                                "hvac_mode",
+                                "blocked_warm_room",
+                                f"{room.temperature:.1f}/{room.target:.1f}C surplus {room.surplus:.2f}C",
+                            )
                         if overheat_off_locked and not overheat_preheat_ready:
                             allow_start = False
                             self._set_heat_pump_phase(
@@ -5163,6 +5273,43 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 and not heat_pump_cheapest_under_target
                             ):
                                 allow_start = False
+
+                        if room.heat_pump:
+                            start_reason = "ikke vurderet"
+                            block_reason = ""
+                            if allow_start:
+                                if heat_pump_cheapest_under_target:
+                                    start_reason = "rum under mål og varmepumpe billigst"
+                                elif shared_demand_active_for_hp:
+                                    start_reason = "linket rum mangler varme"
+                                elif room_hybrid_takeover_heat:
+                                    start_reason = "hybrid overtager varmebehov"
+                                elif overheat_preheat_ready:
+                                    start_reason = "overvarme-lock frigivet"
+                                elif comfort_bias_active:
+                                    start_reason = "komfortgap tillader varme"
+                                else:
+                                    start_reason = "temperatur under startgrænse"
+                            elif force_off_by_ai:
+                                block_reason = "OpenClaw bad om OFF"
+                            elif idle_no_presence_over_target:
+                                block_reason = "ingen presence og rum over mål"
+                            elif warm_room_start_block:
+                                block_reason = f"rum over mål ({room.surplus:.2f}C)"
+                            elif overheat_off_locked and not overheat_preheat_ready:
+                                block_reason = "overvarme-lock aktiv"
+                            elif room.opening_active:
+                                block_reason = "dør/vindue åbent"
+                            elif not allow_heat_pumps:
+                                block_reason = "varmepumpe ikke billigst/tilladt"
+                            elif massive_overheat_active:
+                                block_reason = "massiv overvarme"
+                            else:
+                                block_reason = "intet varmebehov"
+                            rt["hp_start_allowed"] = bool(allow_start)
+                            rt["hp_start_reason"] = start_reason if allow_start else ""
+                            rt["hp_start_block_reason"] = block_reason
+                            rt["hp_start_evaluated_at"] = now_ts
             
                         if room.heat_pump:
                             if idle_no_presence_over_target:
@@ -5399,6 +5546,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     and not stop_due_to_price
                                     and allow_heat_pumps
                                     and not massive_overheat_active
+                                    and hp_state is not None
+                                    and str(hp_state.state).lower() not in {"off", "unknown", "unavailable"}
                                 )
                                 if hard_power_off_ready:
                                     hp_was_running = bool(hp_state and hp_state.state != "off")
@@ -5449,6 +5598,24 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     )
                                     actions.append(
                                         f"{room.name}: billig AC -> holder ved setpoint ({coast_target}C) i stedet for OFF"
+                                    )
+                                elif stop_request and (
+                                    hp_state is None
+                                    or str(hp_state.state).lower() in {"off", "unknown", "unavailable"}
+                                ):
+                                    rt["stop_candidate_since"] = None
+                                    rt["heat_hold_until"] = None
+                                    self._set_heat_pump_phase(
+                                        rt,
+                                        "off_warm_room",
+                                        "varmepumpe forbliver slukket, fordi rummet er over mål",
+                                        now_ts,
+                                    )
+                                    self._record_command_diagnostic(
+                                        room.heat_pump,
+                                        "hvac_mode",
+                                        "blocked_off_warm_room",
+                                        f"{room.temperature:.1f}/{room.target:.1f}C",
                                     )
                                 elif stop_stable and (not hold_active or high_surplus_now):
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
@@ -5945,6 +6112,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "estimated_savings_per_kwh": estimated_savings_per_kwh,
                 "estimated_daily_savings": estimated_daily_savings,
                 "estimated_monthly_savings": estimated_monthly_savings,
+                "heat_economy": heat_economy,
+                "heat_economy_confidence": heat_economy.get("confidence"),
+                "heat_economy_warnings": list(heat_economy.get("warnings") or []),
+                "heat_economy_validation_warnings": list(heat_economy.get("validation_warnings") or []),
+                "heat_economy_strategy_warnings": list(heat_economy.get("strategy_warnings") or []),
+                "cheapest_strategy": heat_economy.get("strategy"),
+                "cheapest_strategy_reason": heat_economy.get("strategy_reason"),
+                "validated_savings_dkk": heat_economy.get("validated_savings_dkk"),
+                "heat_pump_daily_el_kwh": heat_pump_daily_el_kwh,
+                "gas_consumption_m3": gas_consumption_m3,
                 "price_awareness": price_awareness,
                 "heat_pump_cheap_priority_factor": round(heat_pump_cheap_priority_factor, 2),
                 "thermostat_handover": thermostat_handover,
