@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.28
+
+Date: 2026-04-26
+
+### Fixed
+- **Warm-room linked-demand guard**:
+  - linked-room heat demand can no longer wake a heat pump when the heat-pump room itself is already at or above target
+  - fallback control now turns an already warm heat-pump room off and locks it as `off_warm_room`
+  - cheap-heat coasting now dampens toward a lower setpoint before OFF instead of keeping a warm room active at target
+
 ## v0.3.27
 
 Date: 2026-04-26

@@ -4353,7 +4353,42 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 or [0.0]
                             )
                         hp_need = max(effective_gap, shared_deficit)
-                        if hp_need >= 0.15:
+                        fallback_warm_room_block = bool(
+                            room.temperature >= room.target
+                            and room.deficit <= 0.0
+                        )
+                        if fallback_warm_room_block:
+                            hp_state = self.hass.states.get(room.heat_pump)
+                            hp_was_running = bool(
+                                hp_state and hp_state.state not in ("off", "unknown", "unavailable")
+                            )
+                            if hp_was_running:
+                                await self._async_set_hvac_mode_if_needed(
+                                    room.heat_pump,
+                                    HVACMode.OFF,
+                                    actions,
+                                )
+                                rt["last_switch"] = now_ts
+                            rt["heat_hold_until"] = None
+                            rt["stop_candidate_since"] = None
+                            rt["overheat_off_until"] = now_ts + (
+                                max(15.0, room.anti_short_cycle_min * 5.0) * 60.0
+                            )
+                            rt["hp_start_allowed"] = False
+                            rt["hp_start_reason"] = ""
+                            rt["hp_start_block_reason"] = f"rum over mål ({room.surplus:.2f}C)"
+                            rt["hp_start_evaluated_at"] = now_ts
+                            self._set_heat_pump_phase(
+                                rt,
+                                "off_warm_room",
+                                "fallback blokeret: rum over mål",
+                                now_ts,
+                                until_ts=_safe_float(rt.get("overheat_off_until")),
+                            )
+                            actions.append(
+                                f"{room.name}: fallback blokeret, rum over mål ({room.surplus:.1f}C) -> varmepumpe OFF"
+                            )
+                        elif hp_need >= 0.15:
                             hp_boost = 1.0 if hp_need < 0.5 else 1.5
                             hp_target = round(max(16.0, min(30.0, room.target + hp_boost)), decimals)
                             await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
@@ -4894,7 +4929,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             shared_demand_active_for_hp = bool(
                                 room.heat_pump
                                 and shared_deficit_max >= 0.08
-                                and room.surplus < max(0.2, min(0.4, room.stop_surplus_c))
+                                and room.temperature < (room.target - 0.05)
                                 and hp_control_surplus < overheat_release_surplus_c
                             )
                         comfort_effective_gap = max(float(room.deficit), float(room.comfort_gap))
@@ -5196,7 +5231,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 )
                         warm_room_start_block = bool(
                             room.heat_pump
-                            and room.surplus >= max(0.3, min(0.5, room.stop_surplus_c))
+                            and room.temperature >= room.target
                             and not heat_pump_cheapest_under_target
                             and not room_hybrid_takeover_heat
                         )
@@ -5527,6 +5562,11 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 hold_break_surplus = max(stop_temp_threshold + hold_surplus_release_c, 1.6)
                                 high_surplus_now = room.surplus >= hold_break_surplus
                                 hard_power_off_surplus = max(1.5, stop_temp_threshold + 0.5)
+                                if allow_heat_pumps and not shared_demand_active_for_hp:
+                                    hard_power_off_surplus = min(
+                                        hard_power_off_surplus,
+                                        max(0.8, stop_temp_threshold + 0.2),
+                                    )
                                 hard_power_off_ready = bool(
                                     temp_surplus_for_stop >= hard_power_off_surplus
                                     and not shared_demand_active_for_hp
@@ -5587,17 +5627,21 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     )
                                 elif modulate_when_cheap:
                                     rt["stop_candidate_since"] = None
+                                    coast_target = round(
+                                        max(16.0, min(30.0, room.target - 1.5)),
+                                        decimals,
+                                    )
                                     await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
                                     await self._async_set_temperature_if_needed(room.heat_pump, coast_target, actions)
                                     await self._async_set_fan_mode_if_needed(room.heat_pump, hp_fan_preferred, actions)
                                     self._set_heat_pump_phase(
                                         rt,
                                         "coast",
-                                        "billig varmepumpe holdes roligt ved setpunkt",
+                                        "billig varmepumpe dæmpes før OFF ved overskud",
                                         now_ts,
                                     )
                                     actions.append(
-                                        f"{room.name}: billig AC -> holder ved setpoint ({coast_target}C) i stedet for OFF"
+                                        f"{room.name}: billig AC men rum over mål -> dæmper til {coast_target}C før OFF"
                                     )
                                 elif stop_request and (
                                     hp_state is None
