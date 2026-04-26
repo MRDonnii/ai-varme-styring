@@ -1,7 +1,9 @@
-Release v0.3.20 - Smarter radiator cap and correct setpoint steps
+Release v0.3.27 - Heat economy and start-cause diagnostics
 
 What is fixed:
-- In heat-pump-priority mode, radiator is kept below target only while deficit is small.
-- If deficit reaches 0.5C or more, radiator can assist heating again.
-- Heat pump setpoints are rounded to whole degrees.
-- Radiator setpoints are rounded to 0.5C steps.
+- Heat pumps stay off when their own room is already above target, even when electricity is cheap.
+- Linked-room heat demand can still start a pump when the pump room is not already clearly warm.
+- Economy reporting now separates physical validation warnings from strategy warnings.
+- Validated savings are only published when measurements and strategy are both clean.
+- Gas and fjernvarme can be compared alongside heat pumps without removing gas support.
+- Danish sensor text has been cleaned so `æ`, `ø`, `å`, and `°` render correctly.

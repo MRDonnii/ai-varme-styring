@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.26**
+**Current version: 0.3.27**
 
 ## Highlights
 
@@ -18,7 +18,17 @@ Local Home Assistant integration for AI-based heating control with OpenClaw Conv
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.26
+## What is new in v0.3.27
+
+### Heat-pump start protection and economy validation
+
+- Heat pumps stay off when their own room is already above target, even if electricity is cheap.
+- Linked-room demand can still start a pump when the pump room is not clearly warm.
+- AI report attributes now show heat-pump start reasons, economy strategy, validation warnings, strategy warnings, gas use, heat-pump electricity use, and validated savings.
+- Savings are only marked as validated when the measurement basis and strategy state are clean.
+- Gas and fjernvarme are both kept in the economy model, so the integration can compare them during the transition.
+
+## What was new in v0.3.26
 
 ### Public package cleanup
 

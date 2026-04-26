@@ -210,13 +210,13 @@ def _room_summary_from_state(room: dict[str, Any]) -> str:
 
     parts = [name]
     if temp is not None and target is not None:
-        parts.append(f"{temp:.1f}Â°C mod mÃ¥l {target:.1f}Â°C")
+        parts.append(f"{temp:.1f}°C mod mål {target:.1f}°C")
     if deficit > 0:
-        parts.append(f"underskud {deficit:.1f}Â°C")
+        parts.append(f"underskud {deficit:.1f}°C")
     elif surplus > 0:
-        parts.append(f"overskud {surplus:.1f}Â°C")
+        parts.append(f"overskud {surplus:.1f}°C")
     else:
-        parts.append("tÃ¦t pÃ¥ mÃ¥l")
+        parts.append("tæt på mål")
     if humidity is not None:
         parts.append(f"fugt {humidity:.0f}%")
     parts.append(f"varme: {heat_summary}")
@@ -267,6 +267,13 @@ def _room_diagnostic_line(row: dict[str, Any]) -> str:
         parts.append("åbning aktiv")
     if bool(row.get("external_heat_active")):
         parts.append("ekstern varme aktiv")
+    start_allowed = row.get("heat_pump_start_allowed")
+    start_reason = _fix_mojibake_text(str(row.get("heat_pump_start_reason", "")).strip())
+    start_block_reason = _fix_mojibake_text(str(row.get("heat_pump_start_block_reason", "")).strip())
+    if start_allowed is True and start_reason:
+        parts.append(f"varmepumpe start tilladt: {start_reason}")
+    elif start_allowed is False and start_block_reason:
+        parts.append(f"varmepumpe start blokeret: {start_block_reason}")
     if phase_reason:
         parts.append(f"årsag: {phase_reason}")
     return _fix_mojibake_text(", ".join(parts))
@@ -315,7 +322,7 @@ def _filtered_report_points(data: dict[str, Any], report: dict[str, Any], bullet
         "estimeret besparelse:",
         "varmepumpe billigst:",
         "rumvurdering:",
-        "alle rum er tÃ¦t pÃ¥ mÃ¥ltemperatur.",
+        "alle rum er tæt på måltemperatur.",
         "ingen rum har underskud",
     )
 
@@ -794,6 +801,7 @@ async def async_setup_entry(
         AiVarmeIndicatorSensor(data["coordinator"], entry),
         AiVarmeDecisionSourceSensor(data["coordinator"], entry),
         AiVarmeHeatingModeSensor(data["coordinator"], entry),
+        AiVarmeHeatPumpStartReasonSensor(data["coordinator"], entry),
         AiVarmeCheapestSourceSensor(data["coordinator"], entry),
         AiVarmeDailySavingsSensor(data["coordinator"], entry),
         AiVarmeMonthlySavingsSensor(data["coordinator"], entry),
@@ -870,9 +878,9 @@ def _room_slug(room_name: str) -> str:
         normalized.replace("æ", "ae")
         .replace("ø", "oe")
         .replace("å", "aa")
-        .replace("Ã¦", "ae")
-        .replace("Ã¸", "oe")
-        .replace("Ã¥", "aa")
+        .replace("æ", "ae")
+        .replace("ø", "oe")
+        .replace("å", "aa")
     )
     normalized = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
     return normalized or "rum"
@@ -966,31 +974,31 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
         heat_need_source = "temperatur"
         if comfort_mode_active:
             if opening_active:
-                comfort_reason = "Komfort ignoreres midlertidigt, fordi rummet er sat pÃ¥ pause pga. Ã¥bning."
+                comfort_reason = "Komfort ignoreres midlertidigt, fordi rummet er sat på pause pga. åbning."
             elif comfort_gap > deficit + 0.05:
                 heat_need_source = "komfort"
-                if humidity is not None and comfort_band == "tÃ¸r":
-                    comfort_reason = f"TÃ¸r luft ({humidity:.0f}%) lÃ¸fter det oplevede varmebehov lidt."
+                if humidity is not None and comfort_band == "tør":
+                    comfort_reason = f"Tør luft ({humidity:.0f}%) løfter det oplevede varmebehov lidt."
                 elif humidity is not None and comfort_band == "fugtig":
-                    comfort_reason = f"HÃ¸j fugt ({humidity:.0f}%) pÃ¥virker komforten og holder styringen mere forsigtig."
+                    comfort_reason = f"Høj fugt ({humidity:.0f}%) påvirker komforten og holder styringen mere forsigtig."
                 else:
-                    comfort_reason = "Oplevet komfort vejer lidt tungere end rÃ¥ temperatur lige nu."
-            elif humidity is not None and comfort_band in {"tÃ¸r", "fugtig"}:
-                comfort_reason = f"Fugt ({humidity:.0f}%) overvÃ¥ges, men Ã¦ndrer ikke varmebehovet lige nu."
+                    comfort_reason = "Oplevet komfort vejer lidt tungere end rå temperatur lige nu."
+            elif humidity is not None and comfort_band in {"tør", "fugtig"}:
+                comfort_reason = f"Fugt ({humidity:.0f}%) overvåges, men ændrer ikke varmebehovet lige nu."
             else:
-                comfort_reason = "Komfortmode er aktiv, men rÃ¥ temperatur er stadig det styrende signal."
+                comfort_reason = "Komfortmode er aktiv, men rå temperatur er stadig det styrende signal."
         return _clean_text_tree({
             "temperatur": room.get("temperature"),
             "temperatur_raw": room.get("temperature_raw"),
-            "ai_mÃ¥l": target_value,
-            "eco_mÃ¥l": room.get("eco_target"),
+            "ai_mål": target_value,
+            "eco_mål": room.get("eco_target"),
             "komfort_mode_aktiv": comfort_mode_active,
             "komfort_target": room.get("comfort_target"),
             "komfort_offset_c": room.get("comfort_offset_c"),
             "komfort_gap": room.get("comfort_gap"),
             "effektivt_varmebehov": room.get("effective_gap"),
-            "komfort_bÃ¥nd": room.get("comfort_band"),
-            "komfort_Ã¥rsag": comfort_reason,
+            "komfort_bånd": room.get("comfort_band"),
+            "komfort_årsag": comfort_reason,
             "varmebehovskilde": heat_need_source,
             "fugt": room.get("humidity"),
             "eco_away_minutter": room.get("presence_away_min"),
@@ -1007,11 +1015,11 @@ class AiVarmeRoomStatusSensor(AiVarmeRoomBaseSensor):
             "boost_delta_c": room.get("boost_delta_c"),
             "boost_varighed_min": room.get("boost_duration_min"),
             "boost_indtil": room.get("boost_until"),
-            "Ã¥bning_aktiv": room.get("opening_active"),
+            "åbning_aktiv": room.get("opening_active"),
             "presence_aktiv": room.get("occupancy_active"),
             "presence_fallback_aktiv": room.get("occupancy_source_fallback", False),
             "presence_sidst_skiftet": room.get("occupancy_last_change"),
-            "presence_sensorer_utilgÃ¦ngelige": room.get("occupancy_unavailable_sensors", []),
+            "presence_sensorer_utilgængelige": room.get("occupancy_unavailable_sensors", []),
             "presence_eco_tilladt": room.get("presence_eco_enabled", False),
             "learning_tilladt": room.get("learning_enabled", False),
             "vinduespause_tilladt": room.get("opening_pause_enabled", True),
@@ -1033,7 +1041,7 @@ class AiVarmeRoomTemperatureSensor(AiVarmeRoomBaseSensor):
     """Per-room temperature mirror sensor."""
 
     _attr_icon = "mdi:thermometer"
-    _attr_native_unit_of_measurement = "Â°C"
+    _attr_native_unit_of_measurement = "°C"
 
     def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
         super().__init__(coordinator, entry, room_name)
@@ -1056,11 +1064,11 @@ class AiVarmeRoomTargetSensor(AiVarmeRoomBaseSensor):
     """Per-room AI target mirror sensor."""
 
     _attr_icon = "mdi:target"
-    _attr_native_unit_of_measurement = "Â°C"
+    _attr_native_unit_of_measurement = "°C"
 
     def __init__(self, coordinator, entry: ConfigEntry, room_name: str) -> None:
         super().__init__(coordinator, entry, room_name)
-        self._attr_name = f"{room_name} AI-mÃ¥l"
+        self._attr_name = f"{room_name} AI-mål"
         self._attr_unique_id = f"{entry.entry_id}_room_{self._room_slug}_ai_target"
 
     @property
@@ -1136,8 +1144,8 @@ class AiVarmeStatusSensor(AiVarmeBaseEntity, SensorEntity):
             "handlinger_preview": actions[:8] if isinstance(actions, list) else [],
             "rum_antal": len(rooms) if isinstance(rooms, list) else 0,
             "rum_navne": room_names,
-            "utilgÃ¦ngelige_sensorer": unavailable,
-            "utilgÃ¦ngelige_sensorer_antal": len(unavailable) if isinstance(unavailable, list) else 0,
+            "utilgængelige_sensorer": unavailable,
+            "utilgængelige_sensorer_antal": len(unavailable) if isinstance(unavailable, list) else 0,
             "komfort_mode_aktiv": data.get("comfort_mode_enabled", False),
             "komfort_mode_sidst_skiftet": data.get("comfort_mode_last_changed"),
             "komfort_mode_status": data.get("comfort_mode_status"),
@@ -1332,6 +1340,81 @@ class AiVarmeHeatingModeSensor(AiVarmeBaseEntity, SensorEntity):
         }
 
 
+class AiVarmeHeatPumpStartReasonSensor(AiVarmeBaseEntity, SensorEntity):
+    """Human-readable heat-pump start/block reason."""
+
+    _attr_name = "Varmepumpe startårsag"
+    _attr_icon = "mdi:heat-pump-outline"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_heat_pump_start_reason"
+
+    @property
+    def native_value(self) -> str:
+        rows = _room_diagnostics_rows(self.coordinator.data or {})
+        blocked: list[tuple[float, str]] = []
+        allowed: list[tuple[float, str]] = []
+        for row in rows:
+            name = _fix_mojibake_text(str(row.get("name", "")).strip())
+            if not name or row.get("heat_pump_start_allowed") is None:
+                continue
+            surplus = float(_safe_float(row.get("surplus"), 0.0) or 0.0)
+            deficit = float(_safe_float(row.get("deficit"), 0.0) or 0.0)
+            if row.get("heat_pump_start_allowed") is True:
+                reason = _fix_mojibake_text(str(row.get("heat_pump_start_reason", "")).strip())
+                allowed.append((deficit, f"{name}: {reason or 'start tilladt'}"))
+            else:
+                reason = _fix_mojibake_text(str(row.get("heat_pump_start_block_reason", "")).strip())
+                blocked.append((surplus, f"{name}: {reason or 'start blokeret'}"))
+        if allowed:
+            return sorted(allowed, reverse=True)[0][1][:255]
+        if blocked:
+            return sorted(blocked, reverse=True)[0][1][:255]
+        return "Ingen varmepumpebeslutning"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = _room_diagnostics_rows(self.coordinator.data or {})
+        heat_pump_rows: list[dict[str, Any]] = []
+        lines: list[str] = []
+        for row in rows:
+            if row.get("heat_pump_start_allowed") is None and not row.get("heat_pump_phase"):
+                continue
+            name = _fix_mojibake_text(str(row.get("name", "")).strip())
+            allowed = row.get("heat_pump_start_allowed")
+            reason = (
+                row.get("heat_pump_start_reason")
+                if allowed is True
+                else row.get("heat_pump_start_block_reason")
+            )
+            line = f"{name}: "
+            line += "start tilladt" if allowed is True else "start blokeret"
+            if reason:
+                line += f" - {_fix_mojibake_text(str(reason))}"
+            lines.append(line)
+            heat_pump_rows.append(
+                {
+                    "rum": name,
+                    "start_tilladt": allowed,
+                    "start_årsag": row.get("heat_pump_start_reason"),
+                    "start_blokeret_årsag": row.get("heat_pump_start_block_reason"),
+                    "fase": row.get("phase"),
+                    "fase_årsag": row.get("phase_reason"),
+                    "temperatur": row.get("temperature"),
+                    "mål": row.get("target"),
+                    "underskud": row.get("deficit"),
+                    "overskud": row.get("surplus"),
+                    "evalueret": row.get("heat_pump_start_evaluated_at"),
+                }
+            )
+        return {
+            "linjer": _dedupe_lines(lines),
+            "rum": heat_pump_rows,
+            "kommando_diagnostik": (self.coordinator.data or {}).get("command_diagnostics", []),
+        }
+
+
 class AiVarmeCheapestSourceSensor(AiVarmeBaseEntity, SensorEntity):
     """Cheapest source estimate."""
 
@@ -1362,7 +1445,15 @@ class AiVarmeCheapestSourceSensor(AiVarmeBaseEntity, SensorEntity):
             "prisbevidst": data.get("price_awareness"),
             "varmepumpe_billigst": data.get("heat_pump_cheaper"),
             "billigste_alternativ": data.get("cheapest_alt_name"),
+            "billigste_strategi": data.get("cheapest_strategy"),
+            "strategi_årsag": data.get("cheapest_strategy_reason"),
+            "økonomi_tillid": data.get("heat_economy_confidence"),
+            "økonomi_advarsler": data.get("heat_economy_warnings", []),
+            "økonomi_validering_advarsler": data.get("heat_economy_validation_warnings", []),
+            "økonomi_strategi_advarsler": data.get("heat_economy_strategy_warnings", []),
             "estimeret_besparelse_kwh": _num_or_zero(data.get("estimated_savings_per_kwh"), 3),
+            "valideret_besparelse": data.get("validated_savings_dkk"),
+            "varmeøkonomi": data.get("heat_economy", {}),
         }
 
 
@@ -1387,7 +1478,7 @@ class AiVarmeDailySavingsSensor(AiVarmeBaseEntity, SensorEntity):
 class AiVarmeMonthlySavingsSensor(AiVarmeBaseEntity, SensorEntity):
     """Estimated monthly savings."""
 
-    _attr_name = "Estimeret mÃ¥nedsbesparelse"
+    _attr_name = "Estimeret månedsbesparelse"
     _attr_icon = "mdi:cash-multiple"
     _attr_native_unit_of_measurement = "kr"
 
@@ -1405,9 +1496,9 @@ class AiVarmeMonthlySavingsSensor(AiVarmeBaseEntity, SensorEntity):
 class AiVarmeDeficitSensor(AiVarmeBaseEntity, SensorEntity):
     """Largest current deficit."""
 
-    _attr_name = "StÃ¸rste underskud"
+    _attr_name = "Største underskud"
     _attr_icon = "mdi:thermometer-chevron-up"
-    _attr_native_unit_of_measurement = "Â°C"
+    _attr_native_unit_of_measurement = "°C"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
@@ -1439,7 +1530,7 @@ class AiVarmeColdRoomsSensor(AiVarmeBaseEntity, SensorEntity):
 class AiVarmeRadiatorHelpSensor(AiVarmeBaseEntity, SensorEntity):
     """Count rooms where radiator is heating."""
 
-    _attr_name = "RadiatorhjÃ¦lp rum"
+    _attr_name = "Radiatorhjælp rum"
     _attr_icon = "mdi:radiator"
     _attr_native_unit_of_measurement = "rum"
 
@@ -1573,6 +1664,21 @@ class AiVarmeReportSensor(AiVarmeBaseEntity, SensorEntity):
             "udetemperatur": facts.get("outside_temperature"),
             "aktiv_varme": _bool_text(facts.get("heating_active")),
             "billigste_varmekilde": facts.get("cheapest_heat_source"),
+            "billigste_strategi": data.get("cheapest_strategy"),
+            "strategi_årsag": data.get("cheapest_strategy_reason"),
+            "varmeøkonomi": data.get("heat_economy", {}),
+            "varmeoekonomi": data.get("heat_economy", {}),
+            "økonomi_tillid": data.get("heat_economy_confidence"),
+            "oekonomi_tillid": data.get("heat_economy_confidence"),
+            "økonomi_advarsler": data.get("heat_economy_warnings", []),
+            "oekonomi_advarsler": data.get("heat_economy_warnings", []),
+            "økonomi_validering_advarsler": data.get("heat_economy_validation_warnings", []),
+            "oekonomi_validering_advarsler": data.get("heat_economy_validation_warnings", []),
+            "økonomi_strategi_advarsler": data.get("heat_economy_strategy_warnings", []),
+            "oekonomi_strategi_advarsler": data.get("heat_economy_strategy_warnings", []),
+            "valideret_besparelse": data.get("validated_savings_dkk"),
+            "varmepumpe_el_i_dag_kwh": data.get("heat_pump_daily_el_kwh"),
+            "gas_m3_i_dag": data.get("gas_consumption_m3"),
             "flow_begraenset": _bool_text(facts.get("flow_limited")),
             "flow_begrænset": _bool_text(facts.get("flow_limited")),
             "sidste_beslutningsalder_sec": facts.get("last_decision_age_sec"),
