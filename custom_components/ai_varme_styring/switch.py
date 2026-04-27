@@ -72,6 +72,8 @@ class AiVarmeEnabledSwitch(AiVarmeBaseEntity, SwitchEntity, RestoreEntity):
         if last_state is not None:
             self._attr_is_on = last_state.state == "on"
         self.hass.data[DOMAIN][self.entry.entry_id][RUNTIME_ENABLED] = self._attr_is_on
+        await self.coordinator.async_set_enabled(self._attr_is_on)
+        await self.coordinator.async_request_refresh()
 
     async def async_turn_on(self, **kwargs) -> None:
         self._attr_is_on = True

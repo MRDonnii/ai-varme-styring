@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.29**
+**Current version: 0.3.30**
 
 ## Highlights
 
@@ -18,7 +18,15 @@ Local Home Assistant integration for AI-based heating control with OpenClaw Conv
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.29
+## What is new in v0.3.30
+
+### Global AI off really means no climate commands
+
+- Turning off AI Varme Styring now blocks all climate commands from the integration.
+- The restored switch state is synced back into the coordinator at startup, so the UI and control loop cannot disagree.
+- Reports and sensors still update while disabled, but radiators and heat pumps are left alone.
+
+## What was new in v0.3.29
 
 ### Heat-pump anti-cycling
 

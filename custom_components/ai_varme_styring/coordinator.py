@@ -1200,6 +1200,16 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = await self._store.async_load()
         if not isinstance(data, dict):
             return
+        runtime = self.hass.data[DOMAIN][self.entry.entry_id]
+        for key in (
+            RUNTIME_ENABLED,
+            RUNTIME_PRESENCE_ECO_ENABLED,
+            RUNTIME_PID_LAYER_ENABLED,
+            RUNTIME_LEARNING_ENABLED,
+            RUNTIME_COMFORT_MODE_ENABLED,
+        ):
+            if key in data:
+                runtime[key] = bool(data.get(key))
         rr = data.get("room_runtime")
         if isinstance(rr, dict):
             self._room_runtime = rr
@@ -1396,8 +1406,14 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return rooms_cfg
 
     async def _async_save_runtime(self) -> None:
+        runtime = self.hass.data[DOMAIN][self.entry.entry_id]
         await self._store.async_save(
             {
+                RUNTIME_ENABLED: bool(runtime.get(RUNTIME_ENABLED, True)),
+                RUNTIME_PRESENCE_ECO_ENABLED: bool(runtime.get(RUNTIME_PRESENCE_ECO_ENABLED, False)),
+                RUNTIME_PID_LAYER_ENABLED: bool(runtime.get(RUNTIME_PID_LAYER_ENABLED, False)),
+                RUNTIME_LEARNING_ENABLED: bool(runtime.get(RUNTIME_LEARNING_ENABLED, False)),
+                RUNTIME_COMFORT_MODE_ENABLED: bool(runtime.get(RUNTIME_COMFORT_MODE_ENABLED, False)),
                 "room_runtime": self._room_runtime,
                 "manual_baseline": self._manual_baseline,
                 "last_valid_prices": self._last_valid_prices,
@@ -5989,17 +6005,10 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 actions.append("AI provider ikke klar - styring pauset")
             
             if not enabled:
-                # Global AI-styring er slået fra:
-                # - AC/varmepumper styres ikke.
-                # - Radiator-termostater (fx Better Thermostat) følger fortsat AI-rummål.
-                for room in rooms:
-                    if room.target is None:
-                        continue
-                    rad_target = round(max(7.0, min(25.0, room.target)), decimals)
-                    for rad in room.radiators:
-                        await self._async_set_temperature_if_needed(rad, rad_target, actions)
-                if actions:
-                    actions.append("AI OFF: radiatorer følger AI-mål, AC styres manuelt")
+                # Global styring slukket betyder ingen klima-kommandoer.
+                # Rapporter/sensorer må stadig opdateres, men integrationen må
+                # ikke skrive setpunkter eller modes til radiatorer/varmepumper.
+                actions.append("AI OFF: ingen enhedskommandoer sendes")
             
             if (
                 enabled

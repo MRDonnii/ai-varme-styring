@@ -2,6 +2,16 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.30
+
+Date: 2026-04-27
+
+### Fixed
+- **Global disable guard**:
+  - when AI Varme Styring is turned off, the integration no longer sends radiator or heat-pump climate commands
+  - the restored main switch state is now persisted into runtime storage and synced back into the coordinator at startup
+  - reports and sensors can still refresh while disabled, but device control stays idle
+
 ## v0.3.29
 
 Date: 2026-04-27
