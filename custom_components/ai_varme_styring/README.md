@@ -4,7 +4,7 @@
 
 Local Home Assistant integration for AI-based heating control with OpenClaw Conversation, price-aware room decisions, and room-aware comfort control.
 
-**Current version: 0.3.28**
+**Current version: 0.3.29**
 
 ## Highlights
 
@@ -18,7 +18,15 @@ Local Home Assistant integration for AI-based heating control with OpenClaw Conv
 - Richer decision reporting with timestamp, reason, diagnostics, and room actions
 - Dashboard-friendly sensors for room status, AI status, and decision context
 
-## What is new in v0.3.28
+## What is new in v0.3.29
+
+### Heat-pump anti-cycling
+
+- Warm rooms now coast at a lower heat-pump setpoint before the pump is allowed to turn fully off.
+- Normal overshoot must stay stable through the coast period before `OFF` is used.
+- AI damping now lowers output first instead of causing short on/off cycling.
+
+## What was new in v0.3.28
 
 ### Warm-room linked-demand guard
 

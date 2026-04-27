@@ -2,6 +2,17 @@
 
 All significant changes to the integration are documented here.
 
+## v0.3.29
+
+Date: 2026-04-27
+
+### Fixed
+- **Heat-pump anti-cycling**:
+  - normal warm-room stop decisions now use a long coast period before `OFF`
+  - fallback warm-room handling now lowers the heat-pump setpoint while it proves the room can hold temperature
+  - `OFF` after normal overshoot now requires a stable stop request and a proven coast period
+  - AI damping now coasts down instead of immediately powering the heat pump off
+
 ## v0.3.28
 
 Date: 2026-04-26

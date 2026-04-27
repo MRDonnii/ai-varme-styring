@@ -4363,32 +4363,70 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 hp_state and hp_state.state not in ("off", "unknown", "unavailable")
                             )
                             if hp_was_running:
-                                await self._async_set_hvac_mode_if_needed(
-                                    room.heat_pump,
-                                    HVACMode.OFF,
-                                    actions,
+                                if rt.get("hp_coast_since") is None:
+                                    rt["hp_coast_since"] = now_ts
+                                    rt["hp_coast_start_temp"] = round(room.temperature, 3)
+                                coast_age_min = _minutes_since(rt.get("hp_coast_since"), now_ts)
+                                coast_min = max(45.0, room.anti_short_cycle_min * 10.0)
+                                coast_target = round(max(16.0, min(30.0, room.target - 1.5)), decimals)
+                                if coast_age_min >= coast_min and room.temperature >= (room.target + 0.2):
+                                    await self._async_set_hvac_mode_if_needed(
+                                        room.heat_pump,
+                                        HVACMode.OFF,
+                                        actions,
+                                    )
+                                    rt["last_switch"] = now_ts
+                                    rt["overheat_off_until"] = now_ts + (
+                                        max(15.0, room.anti_short_cycle_min * 5.0) * 60.0
+                                    )
+                                    phase = "off_warm_room"
+                                    reason = "coast har holdt temperaturen, varmepumpe slukket"
+                                    action_text = (
+                                        f"{room.name}: fallback coast holdt varmen i {int(coast_age_min)} min -> varmepumpe OFF"
+                                    )
+                                else:
+                                    await self._async_set_hvac_mode_if_needed(
+                                        room.heat_pump,
+                                        HVACMode.HEAT,
+                                        actions,
+                                    )
+                                    await self._async_set_temperature_if_needed(
+                                        room.heat_pump,
+                                        coast_target,
+                                        actions,
+                                    )
+                                    phase = "coast_warm_room"
+                                    reason = "fallback blokeret: rum over mål, dæmper før OFF"
+                                    action_text = (
+                                        f"{room.name}: fallback blokeret, rum over mål -> coast {coast_target}C"
+                                    )
+                                self._set_heat_pump_phase(
+                                    rt,
+                                    phase,
+                                    reason,
+                                    now_ts,
+                                    until_ts=_safe_float(rt.get("overheat_off_until")),
                                 )
-                                rt["last_switch"] = now_ts
+                                actions.append(action_text)
+                            else:
+                                rt["hp_coast_since"] = None
+                                rt["hp_coast_start_temp"] = None
+                                self._set_heat_pump_phase(
+                                    rt,
+                                    "off_warm_room",
+                                    "fallback blokeret: rum over mål",
+                                    now_ts,
+                                    until_ts=_safe_float(rt.get("overheat_off_until")),
+                                )
                             rt["heat_hold_until"] = None
                             rt["stop_candidate_since"] = None
-                            rt["overheat_off_until"] = now_ts + (
-                                max(15.0, room.anti_short_cycle_min * 5.0) * 60.0
-                            )
                             rt["hp_start_allowed"] = False
                             rt["hp_start_reason"] = ""
                             rt["hp_start_block_reason"] = f"rum over mål ({room.surplus:.2f}C)"
                             rt["hp_start_evaluated_at"] = now_ts
-                            self._set_heat_pump_phase(
-                                rt,
-                                "off_warm_room",
-                                "fallback blokeret: rum over mål",
-                                now_ts,
-                                until_ts=_safe_float(rt.get("overheat_off_until")),
-                            )
-                            actions.append(
-                                f"{room.name}: fallback blokeret, rum over mål ({room.surplus:.1f}C) -> varmepumpe OFF"
-                            )
                         elif hp_need >= 0.15:
+                            rt["hp_coast_since"] = None
+                            rt["hp_coast_start_temp"] = None
                             hp_boost = 1.0 if hp_need < 0.5 else 1.5
                             hp_target = round(max(16.0, min(30.0, room.target + hp_boost)), decimals)
                             await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
@@ -4493,6 +4531,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "heat_hold_until": None,
                             "stop_candidate_since": None,
                             "fallback_deficit_since": None,
+                            "hp_coast_since": None,
+                            "hp_coast_start_temp": None,
                             "hp_idle_since": None,
                             "overheat_off_until": None,
                             "hp_phase": "unknown",
@@ -5372,6 +5412,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
                                 rt["heat_hold_until"] = None
                                 rt["stop_candidate_since"] = None
+                                rt["hp_coast_since"] = None
+                                rt["hp_coast_start_temp"] = None
                                 if hp_was_running:
                                     rt["last_switch"] = now_ts
                                 self._set_heat_pump_phase(
@@ -5381,6 +5423,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     now_ts,
                                 )
                             elif allow_start:
+                                rt["hp_coast_since"] = None
+                                rt["hp_coast_start_temp"] = None
                                 rt["stop_candidate_since"] = None
                                 hp_prev_state = str(hp_state.state).lower() if hp_state and hp_state.state is not None else "unknown"
                                 hp_was_not_heat = hp_prev_state != "heat"
@@ -5553,9 +5597,17 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         rt["stop_candidate_since"] = now_ts
                                 else:
                                     rt["stop_candidate_since"] = None
+                                    rt["hp_coast_since"] = None
+                                    rt["hp_coast_start_temp"] = None
                                 stop_stable = bool(
                                     stop_request
                                     and _minutes_since(rt.get("stop_candidate_since"), now_ts) >= stop_delay_min
+                                )
+                                coast_min = max(45.0, room.anti_short_cycle_min * 10.0)
+                                coast_age_min = _minutes_since(rt.get("hp_coast_since"), now_ts)
+                                coast_has_proven = bool(coast_age_min >= coast_min)
+                                temp_holding_after_coast = bool(
+                                    room.temperature >= (room.target + 0.2)
                                 )
                                 hold_until = _safe_float(rt.get("heat_hold_until"))
                                 hold_active = bool(hold_until is not None and hold_until > now_ts)
@@ -5571,7 +5623,9 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     temp_surplus_for_stop >= hard_power_off_surplus
                                     and not shared_demand_active_for_hp
                                     and not room_hybrid_takeover_heat
-                                    and (stop_stable or not hp_delivering_heat)
+                                    and stop_stable
+                                    and coast_has_proven
+                                    and temp_holding_after_coast
                                 )
                                 coast_target = round(max(16.0, min(30.0, room.target)), decimals)
                                 ai_prefers_power_off = bool(
@@ -5595,6 +5649,8 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     rt["overheat_off_until"] = now_ts + (max(15.0, room.anti_short_cycle_min * 5.0) * 60.0)
                                     rt["stop_candidate_since"] = None
                                     rt["heat_hold_until"] = None
+                                    rt["hp_coast_since"] = None
+                                    rt["hp_coast_start_temp"] = None
                                     if hp_was_running:
                                         rt["last_switch"] = now_ts
                                     self._set_heat_pump_phase(
@@ -5608,25 +5664,28 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         f"{room.name}: tydeligt over mål ({temp_surplus_for_stop:.1f}C) -> varmepumpe OFF"
                                     )
                                 elif ai_prefers_power_off and (stop_stable or high_surplus_now):
-                                    hp_was_running = bool(hp_state and hp_state.state != "off")
-                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.OFF, actions)
-                                    rt["overheat_off_until"] = now_ts + (max(10.0, room.anti_short_cycle_min * 3.0) * 60.0)
-                                    rt["stop_candidate_since"] = None
-                                    rt["heat_hold_until"] = None
-                                    if hp_was_running:
-                                        rt["last_switch"] = now_ts
+                                    if rt.get("hp_coast_since") is None:
+                                        rt["hp_coast_since"] = now_ts
+                                        rt["hp_coast_start_temp"] = round(room.temperature, 3)
+                                    coast_target = round(
+                                        max(16.0, min(30.0, room.target - 1.5)),
+                                        decimals,
+                                    )
+                                    await self._async_set_hvac_mode_if_needed(room.heat_pump, HVACMode.HEAT, actions)
+                                    await self._async_set_temperature_if_needed(room.heat_pump, coast_target, actions)
                                     self._set_heat_pump_phase(
                                         rt,
-                                        "off_locked",
-                                        "AI-dæmpning og over mål",
+                                        "coast",
+                                        "AI-dæmpning: sænker før evt. OFF",
                                         now_ts,
-                                        until_ts=_safe_float(rt.get("overheat_off_until")),
                                     )
                                     actions.append(
-                                        f"{room.name}: AI-daempning ({ai_heat_weight:.2f}) + over maal -> varmepumpe OFF"
+                                        f"{room.name}: AI-daempning ({ai_heat_weight:.2f}) + over maal -> coast {coast_target}C"
                                     )
                                 elif modulate_when_cheap:
-                                    rt["stop_candidate_since"] = None
+                                    if rt.get("hp_coast_since") is None:
+                                        rt["hp_coast_since"] = now_ts
+                                        rt["hp_coast_start_temp"] = round(room.temperature, 3)
                                     coast_target = round(
                                         max(16.0, min(30.0, room.target - 1.5)),
                                         decimals,
@@ -5641,7 +5700,7 @@ class AiVarmeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                         now_ts,
                                     )
                                     actions.append(
-                                        f"{room.name}: billig AC men rum over mål -> dæmper til {coast_target}C før OFF"
+                                        f"{room.name}: billig AC men rum over mål -> coast {coast_target}C i mindst {int(coast_min)} min før evt. OFF"
                                     )
                                 elif stop_request and (
                                     hp_state is None

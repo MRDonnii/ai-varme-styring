@@ -1,7 +1,7 @@
-Release v0.3.28 - Warm-room linked-demand guard
+Release v0.3.29 - Heat-pump anti-cycling
 
 What is fixed:
-- Linked-room heat demand can no longer wake a heat pump when the heat-pump room itself is already at or above target.
-- Fallback control now turns warm heat-pump rooms off and marks them as off_warm_room.
-- Cheap-heat coasting now lowers the heat-pump setpoint before OFF instead of keeping a warm room active at target.
-- This prevents Køkken/Stue-style short runs when nearby rooms only have small demand but the pump room is already warm.
+- Warm-room stop decisions now coast at a lower setpoint before full OFF.
+- Normal overshoot must stay stable through a proven coast period before the pump is allowed to shut down.
+- Fallback warm-room handling now lowers output first instead of immediately turning a running pump off.
+- AI damping now modulates down before OFF to reduce heat-pump beeps and short cycling.
