@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="AI Varme Styring">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="heat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="ai" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bg)"/>
+  <path d="M256 112 136 208v176h90v-84h60v84h90V208Z" fill="#ffffff" opacity="0.94"/>
+
+  <rect x="244" y="190" width="24" height="140" rx="12" fill="url(#heat)"/>
+  <circle cx="256" cy="354" r="38" fill="url(#heat)"/>
+
+  <circle cx="178" cy="154" r="16" fill="url(#ai)"/>
+  <circle cx="334" cy="154" r="16" fill="url(#ai)"/>
+  <circle cx="136" cy="256" r="16" fill="url(#ai)"/>
+  <circle cx="376" cy="256" r="16" fill="url(#ai)"/>
+  <path d="M178 154 256 196M334 154 256 196M136 256 212 256M376 256 300 256" stroke="url(#ai)" stroke-width="12" stroke-linecap="round"/>
+</svg>
